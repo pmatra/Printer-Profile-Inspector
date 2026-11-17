@@ -12,6 +12,12 @@ from tkinter import ttk, filedialog, messagebox
 import numpy as np
 from scipy.spatial import ConvexHull
 from PIL import Image, ImageCms
+try:
+    from gamut_gpu import GamutGPU
+    GPU_IMPORT_ERROR = ''
+except ImportError as exc:
+    GamutGPU = None
+    GPU_IMPORT_ERROR = str(exc)
 
 INTENTS = ['Perceptual', 'Relative colorimetric', 'Saturation', 'Absolute colorimetric']
 DEFAULT_DIRECTORY = Path(r'C:\Windows\System32\spool\drivers\color')
@@ -144,7 +150,9 @@ class Inspector(tk.Tk):
         self.path = None
         self.yaw, self.pitch, self.zoom = .65, -.35, 1.8
         self.intent = tk.StringVar(value=INTENTS[1])
-        self.density = tk.StringVar(value='9')
+        self.density = tk.StringVar(value='17')
+        self.render_mode = tk.StringVar(value='High GPU')
+        self.gpu = None
         self.view = tk.StringVar(value='Surface')
         self.main_tabs = ttk.Notebook(self)
         self.main_tabs.pack(fill='both', expand=True, padx=8, pady=8)
@@ -161,11 +169,20 @@ class Inspector(tk.Tk):
         self.subtitle = ttk.Label(self.inspector_tab, text='Open an ICC / ICM printer or RGB profile to begin.', padding=(16, 4))
         self.subtitle.pack(fill='x')
         controls = ttk.Frame(self.inspector_tab, padding=12); controls.pack(fill='x')
-        for label, var, values, width in [('Intent', self.intent, INTENTS, 25), ('Grid / channel', self.density, ['5','9','13'], 5), ('View', self.view, ['Surface','Points','Wireframe'], 12)]:
+        for label, var, values, width in [('Intent', self.intent, INTENTS, 25), ('Grid / channel', self.density, ['5','9','13','17','21'], 5), ('View', self.view, ['Surface','Points','Wireframe'], 12)]:
             ttk.Label(controls, text=label).pack(side='left', padx=(8, 6))
             box = ttk.Combobox(controls, textvariable=var, values=values, state='readonly', width=width)
             box.pack(side='left'); box.bind('<<ComboboxSelected>>', self.changed)
         ttk.Button(controls, text='Reset view', command=self.reset).pack(side='right')
+        render_controls = ttk.Frame(self.inspector_tab, padding=(20, 0, 12, 6))
+        render_controls.pack(fill='x')
+        ttk.Label(render_controls, text='Renderer').pack(side='left', padx=(0, 8))
+        renderer_box = ttk.Combobox(render_controls, textvariable=self.render_mode,
+                                   values=['High GPU', 'Basic CPU'], state='readonly', width=14)
+        renderer_box.pack(side='left')
+        renderer_box.bind('<<ComboboxSelected>>', self.select_renderer)
+        self.gpu_label = ttk.Label(render_controls, text='Initializing hardware OpenGL…', padding=(12, 0))
+        self.gpu_label.pack(side='left')
         split = ttk.Panedwindow(self.inspector_tab, orient='horizontal'); split.pack(fill='both', expand=True, padx=12)
         tabs = ttk.Notebook(split); split.add(tabs, weight=1)
         info = ttk.Frame(tabs); tabs.add(info, text='Profile header')
@@ -180,6 +197,7 @@ class Inspector(tk.Tk):
         self.raw = tk.Text(tagpage, bg='#16202d', fg='#c2d3e7', wrap='none', width=36, font=('Consolas',9))
         self.raw.pack(fill='both', expand=True)
         right = ttk.Frame(split); split.add(right, weight=3)
+        self.render_host = right
         self.canvas = tk.Canvas(right, bg='#0c121c', highlightthickness=0)
         self.canvas.pack(fill='both', expand=True)
         self.canvas.bind('<Configure>', lambda e: self.draw())
@@ -202,11 +220,44 @@ class Inspector(tk.Tk):
         self.gear_button.place(relx=1, x=-14, y=10, anchor='ne')
         self.bind('<Control-comma>', lambda e: self.show_settings())
         self.apply_theme()
+        self.select_renderer()
         self.after(1500, self.watch_windows_theme)
 
     def show_settings(self):
         self.settings_menu.tk_popup(self.gear_button.winfo_rootx(),
                                     self.gear_button.winfo_rooty() + self.gear_button.winfo_height())
+
+    def select_renderer(self, event=None):
+        if self.render_mode.get() == 'High GPU':
+            if GamutGPU is None:
+                self.gpu_failed(f'OpenGL libraries are unavailable: {GPU_IMPORT_ERROR}')
+                return
+            if self.gpu is None:
+                try:
+                    self.gpu = GamutGPU(self.render_host, self)
+                except Exception as exc:
+                    self.gpu_failed(str(exc))
+                    return
+            if self.gpu.failed:
+                self.gpu_failed('The OpenGL viewport could not initialize. Restart after updating your graphics driver.')
+                return
+            self.canvas.pack_forget()
+            self.gpu.pack(fill='both', expand=True)
+        else:
+            if self.gpu is not None:
+                self.gpu.pack_forget()
+            self.canvas.pack(fill='both', expand=True)
+            self.gpu_label.config(text='Basic CPU • Flat triangle rendering')
+        self.draw()
+
+    def gpu_failed(self, reason):
+        self.render_mode.set('Basic CPU')
+        self.select_renderer()
+        self.gpu_label.config(text=f'Basic CPU fallback • {reason}', wraplength=650)
+
+    def viewport_size(self):
+        widget = self.gpu if self.render_mode.get() == 'High GPU' and self.gpu is not None else self.canvas
+        return max(1, widget.winfo_width()), max(1, widget.winfo_height())
 
     def change_theme(self):
         try:
@@ -481,11 +532,15 @@ class Inspector(tk.Tk):
         cp,sp=math.cos(self.pitch),math.sin(self.pitch)
         rotation=np.array([[c,-s,0],[s*sp,c*sp,-cp],[s*cp,c*cp,sp]])
         p=np.asarray(points)@rotation.T
-        scale=self.zoom*min(self.canvas.winfo_width()/800,self.canvas.winfo_height()/600)
-        p[:,:2]*=scale; p[:,0]+=self.canvas.winfo_width()/2; p[:,1]+=self.canvas.winfo_height()/2
+        width, height = self.viewport_size()
+        scale=self.zoom*min(width/800,height/600)
+        p[:,:2]*=scale; p[:,0]+=width/2; p[:,1]+=height/2
         return p
 
     def draw(self):
+        if self.render_mode.get() == 'High GPU' and self.gpu is not None:
+            self.gpu.request_draw()
+            return
         cv=self.canvas; cv.delete('all'); self.hitpoints=[]
         palette = getattr(self, 'colors', dict(axis='#999999', text='#f2f2f2', muted='#bfbfbf', wire='#aaaaaa', compare='#61d6e8'))
         axes=np.array([[0,0,-50],[110,0,-50],[0,110,-50],[0,0,65]])
@@ -544,6 +599,15 @@ class Inspector(tk.Tk):
             except OSError as exc: messagebox.showerror('Export failed',str(exc))
 
 if __name__=='__main__':
+    if len(sys.argv) == 3 and sys.argv[1] == '--gpu-check':
+        from check_gpu import run_check
+        try:
+            result = run_check(sys.modules[__name__])
+            Path(sys.argv[2]).write_text(json.dumps({'passed': True, **result}, indent=2), encoding='utf-8')
+        except Exception as exc:
+            Path(sys.argv[2]).write_text(json.dumps({'passed': False, 'error': str(exc)}, indent=2), encoding='utf-8')
+            sys.exit(1)
+        sys.exit(0)
     app=Inspector()
     if len(sys.argv)>1: app.after(100,lambda:app.load(sys.argv[1]))
     app.mainloop()
