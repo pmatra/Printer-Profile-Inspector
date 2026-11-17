@@ -6,6 +6,8 @@ Download the Windows ZIP under **Assets**, extract the entire archive, and run t
 
 Run `ICC Gamut Inspector.exe` in the application folder. No Python installation is needed for the packaged application. You can also pass an ICC/ICM file path on the command line.
 
+Use the **gear button in the upper-right corner → Theme** to select **Windows Light**, **Windows Dark**, or **Follow Windows** (the default). The choice is saved alongside the directory preference in `settings.json`. Follow Windows checks the Windows app appearance setting while the program is open. Text, controls, tables, and the plot background and labels adapt; sampled gamut colors retain their color meaning. Ctrl+, also opens the settings menu.
+
 The top tabs switch between **ICC/Gamut Inspector** and **Profile List**. The list initially reads `C:\Windows\System32\spool\drivers\color` and displays directory contents with Filename, Version, Device color space, Created, and Status columns. Created is the ICC header creation date, not the filesystem date. Click a column heading to sort. Double-click a profile to open it in the inspector; double-click a folder to browse into it.
 
 On **Profile List**, use **Open Directory** to browse another folder, then check **Make this directory default** to use that folder on future launches. Unchecking restores the Windows color directory as the startup default. The preference is stored in `settings.json` beside the executable (or beside the Python source when running from source); keep the application in a writable folder. **Refresh** reloads the directory contents. Unreadable profiles remain listed with an explanatory status.

@@ -16,6 +16,28 @@ from PIL import Image, ImageCms
 INTENTS = ['Perceptual', 'Relative colorimetric', 'Saturation', 'Absolute colorimetric']
 DEFAULT_DIRECTORY = Path(r'C:\Windows\System32\spool\drivers\color')
 SETTINGS_PATH = Path(sys.executable if getattr(sys, 'frozen', False) else __file__).resolve().parent / 'settings.json'
+THEMES = ('Windows Light', 'Windows Dark', 'Follow Windows')
+
+def read_settings():
+    try:
+        value = json.loads(SETTINGS_PATH.read_text(encoding='utf-8'))
+        return value if isinstance(value, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+def save_setting(key, value):
+    settings = read_settings()
+    settings[key] = value
+    SETTINGS_PATH.write_text(json.dumps(settings, indent=2), encoding='utf-8')
+
+def windows_is_dark():
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                            r'Software\Microsoft\Windows\CurrentVersion\Themes\Personalize') as key:
+            return winreg.QueryValueEx(key, 'AppsUseLightTheme')[0] == 0
+    except (ImportError, OSError):
+        return False
 
 def created_date(data):
     parts = struct.unpack_from('>6H', data, 24)
@@ -106,6 +128,9 @@ class Inspector(tk.Tk):
         self.geometry('1280x820')
         self.minsize(980, 650)
         self.configure(bg='#111720')
+        preference = read_settings().get('theme', 'Follow Windows')
+        self.theme_choice = tk.StringVar(value=preference if preference in THEMES else 'Follow Windows')
+        self.active_dark = None
         style = ttk.Style(self)
         style.theme_use('clam')
         style.configure('.', background='#1c2532', foreground='#e3eaf4', font=('Segoe UI', 10))
@@ -166,6 +191,99 @@ class Inspector(tk.Tk):
         self.status.pack(fill='x')
         self.bind('<Control-o>', lambda e: self.open())
         self.build_list_tab()
+        self.settings_menu = tk.Menu(self, tearoff=False)
+        self.theme_menu = tk.Menu(self.settings_menu, tearoff=False)
+        for name in THEMES:
+            self.theme_menu.add_radiobutton(label=name, variable=self.theme_choice, value=name,
+                                           command=self.change_theme)
+        self.settings_menu.add_cascade(label='Theme', menu=self.theme_menu)
+        self.gear_button = ttk.Button(self, text='⚙', width=3, command=self.show_settings,
+                                      takefocus=True)
+        self.gear_button.place(relx=1, x=-14, y=10, anchor='ne')
+        self.bind('<Control-comma>', lambda e: self.show_settings())
+        self.apply_theme()
+        self.after(1500, self.watch_windows_theme)
+
+    def show_settings(self):
+        self.settings_menu.tk_popup(self.gear_button.winfo_rootx(),
+                                    self.gear_button.winfo_rooty() + self.gear_button.winfo_height())
+
+    def change_theme(self):
+        try:
+            save_setting('theme', self.theme_choice.get())
+        except OSError as exc:
+            messagebox.showerror('Theme preference could not be saved', str(exc))
+        self.apply_theme()
+
+    def watch_windows_theme(self):
+        if self.theme_choice.get() == 'Follow Windows':
+            dark = windows_is_dark()
+            if dark != self.active_dark:
+                self.apply_theme()
+        self.after(1500, self.watch_windows_theme)
+
+    def apply_theme(self):
+        self.active_dark = (windows_is_dark() if self.theme_choice.get() == 'Follow Windows'
+                            else self.theme_choice.get() == 'Windows Dark')
+        if self.active_dark:
+            self.colors = dict(bg='#202020', panel='#292929', field='#1b1b1b', text='#f2f2f2',
+                               muted='#bfbfbf', border='#555555', hover='#3c3c3c', selected='#005a9e',
+                               selection_text='#ffffff', plot='#181818', axis='#999999', wire='#aaaaaa',
+                               compare='#61d6e8')
+        else:
+            self.colors = dict(bg='#f3f3f3', panel='#fafafa', field='#ffffff', text='#202020',
+                               muted='#595959', border='#b5b5b5', hover='#e5e5e5', selected='#cce8ff',
+                               selection_text='#202020', plot='#ffffff', axis='#707070', wire='#626262',
+                               compare='#006879')
+        p = self.colors
+        style = ttk.Style(self)
+        style.configure('.', background=p['bg'], foreground=p['text'], bordercolor=p['border'],
+                        lightcolor=p['bg'], darkcolor=p['border'], font=('Segoe UI', 10))
+        style.configure('TButton', background=p['panel'], foreground=p['text'], padding=8)
+        style.map('TButton', background=[('active', p['hover']), ('pressed', p['selected'])])
+        style.configure('TNotebook', background=p['bg'])
+        style.configure('TNotebook.Tab', background=p['panel'], foreground=p['text'], padding=(10,7))
+        style.map('TNotebook.Tab', background=[('selected',p['selected']), ('active',p['hover'])],
+                  foreground=[('selected',p['selection_text'])])
+        style.configure('Treeview', background=p['field'], fieldbackground=p['field'],
+                        foreground=p['text'], rowheight=27)
+        style.configure('Treeview.Heading', background=p['panel'], foreground=p['text'])
+        style.map('Treeview', background=[('selected',p['selected'])],
+                  foreground=[('selected',p['selection_text'])])
+        style.map('Treeview.Heading', background=[('active',p['hover'])])
+        style.configure('TCombobox', fieldbackground=p['field'], foreground=p['text'], arrowcolor=p['text'])
+        style.map('TCombobox', fieldbackground=[('readonly',p['field'])],
+                  foreground=[('readonly',p['text']), ('disabled',p['muted'])],
+                  selectbackground=[('readonly',p['selected'])], selectforeground=[('readonly',p['selection_text'])])
+        style.configure('TCheckbutton', background=p['bg'], foreground=p['text'])
+        style.map('TCheckbutton', background=[('active',p['hover'])])
+        style.configure('Vertical.TScrollbar', background=p['panel'], troughcolor=p['bg'], arrowcolor=p['text'])
+        style.configure('Horizontal.TScrollbar', background=p['panel'], troughcolor=p['bg'], arrowcolor=p['text'])
+        self.configure(bg=p['bg'])
+        for text in (self.header, self.raw):
+            text.configure(bg=p['field'], fg=p['text'], insertbackground=p['text'],
+                           selectbackground=p['selected'], selectforeground=p['selection_text'])
+        self.canvas.configure(bg=p['plot'])
+        for menu in (self.settings_menu, self.theme_menu):
+            menu.configure(background=p['panel'], foreground=p['text'], activebackground=p['selected'],
+                           activeforeground=p['selection_text'], selectcolor=p['text'])
+        self.option_add('*TCombobox*Listbox.background', p['field'])
+        self.option_add('*TCombobox*Listbox.foreground', p['text'])
+        self.option_add('*TCombobox*Listbox.selectBackground', p['selected'])
+        self.option_add('*TCombobox*Listbox.selectForeground', p['selection_text'])
+        self.update_idletasks()
+        if sys.platform == 'win32':
+            try:
+                import ctypes
+                get_parent = ctypes.windll.user32.GetParent
+                get_parent.argtypes = [ctypes.c_void_p]
+                get_parent.restype = ctypes.c_void_p
+                hwnd = get_parent(self.winfo_id())
+                dark = ctypes.c_int(self.active_dark)
+                ctypes.windll.dwmapi.DwmSetWindowAttribute(ctypes.c_void_p(hwnd), 20,
+                                                          ctypes.byref(dark), ctypes.sizeof(dark))
+            except (AttributeError, OSError):
+                pass
         self.draw()
 
     def build_list_tab(self):
@@ -219,7 +337,7 @@ class Inspector(tk.Tk):
     def save_default_directory(self):
         new_default = self.directory if self.make_default.get() else str(DEFAULT_DIRECTORY)
         try:
-            SETTINGS_PATH.write_text(json.dumps({'default_directory': new_default}, indent=2), encoding='utf-8')
+            save_setting('default_directory', new_default)
             self.default_directory = new_default
             self.make_default.set(Path(self.directory) == Path(new_default))
             self.directory_status.config(text=f'Default directory saved: {new_default}')
@@ -318,13 +436,14 @@ class Inspector(tk.Tk):
 
     def draw(self):
         cv=self.canvas; cv.delete('all'); self.hitpoints=[]
+        palette = getattr(self, 'colors', dict(axis='#999999', text='#f2f2f2', muted='#bfbfbf', wire='#aaaaaa', compare='#61d6e8'))
         axes=np.array([[0,0,-50],[110,0,-50],[0,110,-50],[0,0,65]])
         a=self.project(axes)
         for i,label,color in [(1,'a*','#ed8c9c'),(2,'b*','#e5cb73'),(3,'L*','#d4dce6')]:
-            cv.create_line(*a[0,:2],*a[i,:2],fill='#455265',arrow='last')
-            cv.create_text(*a[i,:2],text=label,fill=color,anchor='sw',font=('Segoe UI',11))
+            cv.create_line(*a[0,:2],*a[i,:2],fill=palette['axis'],arrow='last')
+            cv.create_text(*a[i,:2],text=label,fill=palette['text'],anchor='sw',font=('Segoe UI',11))
         if not self.primary and not self.comparison:
-            cv.create_text(cv.winfo_width()/2,cv.winfo_height()/2,text='Explore the color your profile can reproduce.\n\nOpen a printer ICC profile to see its sampled gamut.',fill='#93a6be',justify='center',font=('Segoe UI',14))
+            cv.create_text(cv.winfo_width()/2,cv.winfo_height()/2,text='Explore the color your profile can reproduce.\n\nOpen a printer ICC profile to see its sampled gamut.',fill=palette['muted'],justify='center',font=('Segoe UI',14))
         for result, comparison in [(self.primary,False),(self.comparison,True)]:
             if result is None: continue
             p=self.project(result['points']); hull=result['hull']
@@ -333,7 +452,7 @@ class Inspector(tk.Tk):
                 faces=sorted(hull.simplices,key=lambda t:p[t,2].mean())
                 for tri in faces:
                     color='#'+''.join(f'{int(v):02x}' for v in result['rgb'][tri].mean(axis=0))
-                    cv.create_polygon(*p[tri,:2].flatten(),fill=color if view=='Surface' else '',outline='#64dce8' if comparison else (color if view=='Surface' else '#677c93'),width=1)
+                    cv.create_polygon(*p[tri,:2].flatten(),fill=color if view=='Surface' else '',outline=palette['compare'] if comparison else (color if view=='Surface' else palette['wire']),width=1)
                 indices=hull.vertices
             else:
                 indices=range(len(p))
@@ -341,8 +460,8 @@ class Inspector(tk.Tk):
                     x,y=p[i,:2]; color='#'+''.join(f'{v:02x}' for v in result['rgb'][i])
                     cv.create_oval(x-2,y-2,x+2,y+2,fill=color,outline='')
             if not comparison: self.hitpoints=[(p[i,0],p[i,1],result['lab'][i]) for i in indices]
-        cv.create_text(18,18,anchor='nw',text='CIELAB / D50',fill='#d4e3f5',font=('Segoe UI',12,'bold'))
-        cv.create_text(18,44,anchor='nw',text='Drag to orbit  ·  Scroll to zoom\nSurface = convex hull of sampled device colors',fill='#8297b0',font=('Segoe UI',10))
+        cv.create_text(18,18,anchor='nw',text='CIELAB / D50',fill=palette['text'],font=('Segoe UI',12,'bold'))
+        cv.create_text(18,44,anchor='nw',text='Drag to orbit  ·  Scroll to zoom\nSurface = convex hull of sampled device colors',fill=palette['muted'],font=('Segoe UI',10))
 
     def hover(self,e):
         if not self.hitpoints:return

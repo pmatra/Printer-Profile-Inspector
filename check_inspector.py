@@ -26,6 +26,13 @@ with tempfile.TemporaryDirectory() as d:
         except ValueError: pass
         else: raise AssertionError('Malformed ICC accepted')
     app = m.Inspector()
+    for theme in m.THEMES:
+        app.theme_choice.set(theme)
+        app.change_theme()
+        app.update()
+        assert app.canvas.cget('background') == app.colors['plot']
+    app.theme_choice.set('Windows Dark')
+    app.change_theme()
     assert app.directory == str(m.DEFAULT_DIRECTORY)
     assert len(app.main_tabs.tabs()) == 2
     app.directory = d
@@ -44,12 +51,23 @@ with tempfile.TemporaryDirectory() as d:
         app.view.set(view); app.draw(); app.update()
     app.clear(); app.reset(); app.destroy()
     reopened = m.Inspector()
+    assert reopened.theme_choice.get() == 'Windows Dark'
+    assert reopened.active_dark
     assert reopened.directory == d, 'Default directory must survive restart'
     reopened.make_default.set(False)
     reopened.save_default_directory()
     assert reopened.default_directory == str(m.DEFAULT_DIRECTORY)
+    assert m.read_settings()['theme'] == 'Windows Dark', 'Directory save must preserve theme'
+    m.windows_is_dark = lambda: False
+    reopened.theme_choice.set('Follow Windows')
+    reopened.change_theme()
+    assert not reopened.active_dark
+    m.windows_is_dark = lambda: True
+    reopened.watch_windows_theme()
+    assert reopened.active_dark, 'Follow Windows must respond to system theme changes'
     reopened.destroy()
     print('PASS: top-level tabs, directory metadata, malformed-file rows, saved default and reset')
+    print('PASS: all themes, preference persistence, directory preference coexistence and live system theme changes')
     print('PASS: sRGB endpoints, sampling, hull, malformed profiles, GUI loading, comparison and rendering modes')
 for filename in ['CoatedFOGRA39.icc', 'Epson IJ Printer 07.icc', 'AdobeRGB1998.icc']:
     path = Path('C:/Windows/System32/spool/drivers/color') / filename
