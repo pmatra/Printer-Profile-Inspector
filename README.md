@@ -1,5 +1,9 @@
 # ICC Gamut Inspector
 
+[Download the latest Windows release](https://github.com/pmatra/Printer-Profile-Inspector/releases/latest) · [Release v0.2.0](https://github.com/pmatra/Printer-Profile-Inspector/releases/tag/v0.2.0)
+
+Download the Windows ZIP under **Assets**, extract the entire archive, and run the executable inside the application folder. Each release tag identifies the matching source revision.
+
 Run `ICC Gamut Inspector.exe` in the application folder. No Python installation is needed for the packaged application. You can also pass an ICC/ICM file path on the command line.
 
 The top tabs switch between **ICC/Gamut Inspector** and **Profile List**. The list initially reads `C:\Windows\System32\spool\drivers\color` and displays directory contents with Filename, Version, Device color space, Created, and Status columns. Created is the ICC header creation date, not the filesystem date. Click a column heading to sort. Double-click a profile to open it in the inspector; double-click a folder to browse into it.
