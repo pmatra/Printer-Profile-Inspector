@@ -264,7 +264,7 @@ class Inspector(tk.Tk):
             text.configure(bg=p['field'], fg=p['text'], insertbackground=p['text'],
                            selectbackground=p['selected'], selectforeground=p['selection_text'])
         self.canvas.configure(bg=p['plot'])
-        for menu in (self.settings_menu, self.theme_menu):
+        for menu in (self.settings_menu, self.theme_menu, self.profile_menu):
             menu.configure(background=p['panel'], foreground=p['text'], activebackground=p['selected'],
                            activeforeground=p['selection_text'], selectcolor=p['text'])
         self.option_add('*TCombobox*Listbox.background', p['field'])
@@ -321,6 +321,8 @@ class Inspector(tk.Tk):
         frame.rowconfigure(0, weight=1); frame.columnconfigure(0, weight=1)
         self.profile_list.bind('<Double-1>', self.open_list_selection)
         self.profile_list.bind('<Return>', self.open_list_selection)
+        self.profile_menu = tk.Menu(self, tearoff=False)
+        self.profile_list.bind('<Button-3>', self.show_profile_menu)
         self.directory_status = ttk.Label(self.list_tab, padding=12)
         self.directory_status.pack(fill='x')
         self.sort_reverse = {}
@@ -365,6 +367,55 @@ class Inspector(tk.Tk):
         rows = sorted(self.profile_list.get_children(), key=lambda i: self.profile_list.set(i, column).casefold(), reverse=reverse)
         for index, item in enumerate(rows): self.profile_list.move(item, '', index)
         self.sort_reverse[column] = not reverse
+
+    def show_profile_menu(self, event):
+        item = self.profile_list.identify_row(event.y)
+        if not item:
+            return
+        self.profile_list.selection_set(item)
+        self.profile_list.focus(item)
+        path = self.list_paths.get(item)
+        if path is None or path.suffix.lower() not in ('.icc', '.icm') or not path.is_file():
+            return
+        self.profile_menu.delete(0, 'end')
+        # Capture the clicked file so selection changes cannot redirect deletion.
+        self.profile_menu.add_command(label='Delete profile…', command=lambda p=path: self.delete_profile(p))
+        try:
+            self.profile_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.profile_menu.grab_release()
+
+    def delete_profile(self, path):
+        path = Path(path)
+        if path.suffix.lower() not in ('.icc', '.icm') or not path.is_file():
+            messagebox.showerror('Cannot delete profile', f'The profile is no longer available:\n\n{path}', parent=self)
+            self.refresh_directory()
+            return
+        if not messagebox.askyesno('Delete profile?',
+                                  f'Do you want to delete this specific profile?\n\n{path.name}\n\n{path}\n\nThis permanently deletes the file.',
+                                  icon='warning', default=messagebox.NO, parent=self):
+            return
+        try:
+            path.unlink()
+        except OSError as exc:
+            messagebox.showerror('Profile could not be deleted', f'{path}\n\n{exc}', parent=self)
+            return
+        if self.path and Path(self.path) == path:
+            self.path = None
+            self.primary = None
+            self.data = b''
+            self.tagdata = []
+            self.settext(self.header, 'The loaded profile was deleted.')
+            self.settext(self.raw, '')
+            for item in self.tags.get_children():
+                self.tags.delete(item)
+            self.subtitle.config(text='Open an ICC / ICM printer or RGB profile to begin.')
+            self.status.config(text=f'Deleted profile: {path.name}')
+        if self.comparison and Path(self.comparison['path']) == path:
+            self.comparison = None
+        self.refresh_directory()
+        self.directory_status.config(text=f'Deleted profile: {path.name}')
+        self.draw()
 
     def open_list_selection(self, event=None):
         selected = self.profile_list.selection()

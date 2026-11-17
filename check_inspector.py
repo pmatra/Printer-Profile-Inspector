@@ -1,5 +1,6 @@
 import importlib.util
 import tempfile
+from unittest.mock import patch
 from pathlib import Path
 import numpy as np
 from PIL import ImageCms
@@ -49,7 +50,30 @@ with tempfile.TemporaryDirectory() as d:
     app.load(str(path), True)
     for view in ['Points', 'Surface', 'Wireframe']:
         app.view.set(view); app.draw(); app.update()
-    app.clear(); app.reset(); app.destroy()
+    app.clear(); app.reset()
+    victim = Path(d) / 'delete-test.icc'
+    victim.write_bytes(path.read_bytes())
+    app.refresh_directory()
+    with patch.object(m.messagebox, 'askyesno', return_value=False) as question:
+        app.delete_profile(victim)
+        assert victim.exists(), 'No must preserve the file'
+        assert str(victim) in question.call_args.args[1]
+        assert question.call_args.kwargs['default'] == m.messagebox.NO
+    with patch.object(m.messagebox, 'askyesno', return_value=True), patch.object(Path, 'unlink', side_effect=PermissionError('Access denied')), patch.object(m.messagebox, 'showerror') as error:
+        app.delete_profile(victim)
+        assert victim.exists()
+        error.assert_called_once()
+    app.load(str(victim))
+    with patch.object(m.messagebox, 'askyesno', return_value=True):
+        app.delete_profile(victim)
+    assert not victim.exists() and app.primary is None and app.path is None
+    assert victim not in app.list_paths.values()
+    assert path.exists(), 'Deleting one profile must preserve the other profiles'
+    with patch.object(m.messagebox, 'askyesno') as question, patch.object(m.messagebox, 'showerror'):
+        app.delete_profile(Path(d) / 'settings.json')
+        question.assert_not_called()
+    print('PASS: delete confirmation No/Yes, exact path, permission failure, list refresh and loaded-profile cleanup')
+    app.destroy()
     reopened = m.Inspector()
     assert reopened.theme_choice.get() == 'Windows Dark'
     assert reopened.active_dark

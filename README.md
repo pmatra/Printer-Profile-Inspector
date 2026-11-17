@@ -10,6 +10,8 @@ Use the **gear button in the upper-right corner → Theme** to select **Windows 
 
 The top tabs switch between **ICC/Gamut Inspector** and **Profile List**. The list initially reads `C:\Windows\System32\spool\drivers\color` and displays directory contents with Filename, Version, Device color space, Created, and Status columns. Created is the ICC header creation date, not the filesystem date. Click a column heading to sort. Double-click a profile to open it in the inspector; double-click a folder to browse into it.
 
+Right-click an ICC/ICM profile in **Profile List** and choose **Delete profile…**. A Yes/No confirmation shows the exact filename and full path, with **No** selected by default. **Yes** permanently deletes that file and refreshes the list. Files that Windows does not permit you to delete show an error and remain listed.
+
 On **Profile List**, use **Open Directory** to browse another folder, then check **Make this directory default** to use that folder on future launches. Unchecking restores the Windows color directory as the startup default. The preference is stored in `settings.json` beside the executable (or beside the Python source when running from source); keep the application in a writable folder. **Refresh** reloads the directory contents. Unreadable profiles remain listed with an explanatory status.
 
 Open a printer profile with **Open profile**. Drag the plot to rotate and scroll to zoom. Use **Compare** to overlay a second profile as a cyan wireframe. Select Surface, Points, or Wireframe and choose a rendering intent or sampling grid. **Export samples** saves the primary profile's D50 CIELAB samples to CSV.
