@@ -22,6 +22,20 @@ Surface mode displays a **convex hull approximation** of a finite grid of device
 
 ## Source and rebuilding
 
+The complete application is implemented in `inspector.py`; the original reference viewer's executable and DLLs are not its source files.
+
+| File | Purpose |
+| --- | --- |
+| `inspector.py` | ICC parsing, profile directory browser, desktop interface, color transforms, 3D plotting, and export |
+| `check_inspector.py` | Regression checks for profile parsing, color sampling, interface views, and saved defaults |
+| `preview_list.py` | Launch the application with the Profile List tab selected |
+| `build.ps1` | Build the Windows application using PyInstaller |
+| `requirements.txt` | Dependency version ranges |
+| `requirements-lock.txt` | Exact dependency versions used for the Windows build |
+| `.gitignore` | Exclude generated builds, local settings, and virtual environments |
+
+Run the existing regression checks with `python check_inspector.py` after installing the dependencies. These checks open desktop windows and require a graphical desktop. Additional checks use installed Windows printer profiles when available.
+
 Source: `inspector.py`. Python 3.12 or later is recommended.
 
 ```powershell
