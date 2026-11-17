@@ -38,7 +38,7 @@ with tempfile.TemporaryDirectory() as d:
     assert len(app.main_tabs.tabs()) == 2
     app.directory = d
     app.refresh_directory()
-    entries = [app.profile_list.item(i, 'values') for i in app.profile_list.get_children()]
+    entries = [app.profile_list.item(i, 'values') for i in app.list_paths]
     srgb_row = next(row for row in entries if row[0] == 'sRGB.icc')
     assert srgb_row[1] and srgb_row[2] == 'RGB' and len(srgb_row[3]) == 19
     assert any(row[0] == 'bad.icc' and row[-1].startswith('Unreadable') for row in entries)

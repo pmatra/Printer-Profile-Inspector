@@ -12,6 +12,7 @@ from tkinter import ttk, filedialog, messagebox
 import numpy as np
 from scipy.spatial import ConvexHull
 from PIL import Image, ImageCms
+from profile_categories import ProfileCategories
 try:
     from gamut_gpu import GamutGPU
     GPU_IMPORT_ERROR = ''
@@ -127,7 +128,7 @@ def sample_gamut(path, intent=1, density=9):
     return {'path': str(path), 'lab': lab, 'points': points, 'rgb': rgb,
             'hull': hull, 'samples': len(points), 'intent': intent}
 
-class Inspector(tk.Tk):
+class Inspector(ProfileCategories, tk.Tk):
     def __init__(self):
         super().__init__()
         self.title('ICC Gamut Inspector')
@@ -307,6 +308,7 @@ class Inspector(tk.Tk):
                   foreground=[('readonly',p['text']), ('disabled',p['muted'])],
                   selectbackground=[('readonly',p['selected'])], selectforeground=[('readonly',p['selection_text'])])
         style.configure('TCheckbutton', background=p['bg'], foreground=p['text'])
+        style.configure('TEntry', fieldbackground=p['field'], foreground=p['text'], insertcolor=p['text'])
         style.map('TCheckbutton', background=[('active',p['hover'])])
         style.configure('Vertical.TScrollbar', background=p['panel'], troughcolor=p['bg'], arrowcolor=p['text'])
         style.configure('Horizontal.TScrollbar', background=p['panel'], troughcolor=p['bg'], arrowcolor=p['text'])
@@ -315,6 +317,7 @@ class Inspector(tk.Tk):
             text.configure(bg=p['field'], fg=p['text'], insertbackground=p['text'],
                            selectbackground=p['selected'], selectforeground=p['selection_text'])
         self.canvas.configure(bg=p['plot'])
+        self.profile_list.tag_configure('drop_target', background=p['selected'], foreground=p['selection_text'])
         for menu in (self.settings_menu, self.theme_menu, self.profile_menu):
             menu.configure(background=p['panel'], foreground=p['text'], activebackground=p['selected'],
                            activeforeground=p['selection_text'], selectcolor=p['text'])
@@ -355,12 +358,21 @@ class Inspector(tk.Tk):
                         command=self.save_default_directory).pack(side='left', padx=16)
         ttk.Button(toolbar, text='Refresh', command=self.refresh_directory).pack(side='left')
         ttk.Button(toolbar, text='Open selected profile', command=self.open_list_selection).pack(side='right')
+        category_bar = ttk.Frame(self.list_tab, padding=(12, 0, 12, 6))
+        category_bar.pack(fill='x')
+        ttk.Button(category_bar, text='Create category from checked…', command=self.create_category).pack(side='left')
+        ttk.Button(category_bar, text='Rename category', command=self.rename_selected_category).pack(side='left', padx=8)
+        ttk.Button(category_bar, text='Clear checks', command=self.clear_profile_checks).pack(side='left')
+        self.checked_label = ttk.Label(category_bar, text='0 checked', padding=(12, 0))
+        self.checked_label.pack(side='left')
         self.directory_label = ttk.Label(self.list_tab, padding=(12, 4), wraplength=1000)
         self.directory_label.pack(fill='x')
         frame = ttk.Frame(self.list_tab, padding=12)
         frame.pack(fill='both', expand=True)
         columns = ('filename', 'version', 'space', 'created', 'status')
-        self.profile_list = ttk.Treeview(frame, columns=columns, show='headings', selectmode='browse')
+        self.profile_list = ttk.Treeview(frame, columns=columns, show='tree headings', selectmode='browse')
+        self.profile_list.heading('#0', text='Check', command=self.check_all_profiles)
+        self.profile_list.column('#0', width=85, minwidth=70, stretch=False)
         for column, title, width in zip(columns, ['Filename', 'Version', 'Device color space', 'Created', 'Status'], [340, 85, 150, 180, 230]):
             self.profile_list.heading(column, text=title, command=lambda c=column: self.sort_directory(c))
             self.profile_list.column(column, width=width, minwidth=75)
@@ -370,14 +382,17 @@ class Inspector(tk.Tk):
         self.profile_list.grid(row=0, column=0, sticky='nsew')
         vertical.grid(row=0, column=1, sticky='ns'); horizontal.grid(row=1, column=0, sticky='ew')
         frame.rowconfigure(0, weight=1); frame.columnconfigure(0, weight=1)
-        self.profile_list.bind('<Double-1>', self.open_list_selection)
         self.profile_list.bind('<Return>', self.open_list_selection)
         self.profile_menu = tk.Menu(self, tearoff=False)
         self.profile_list.bind('<Button-3>', self.show_profile_menu)
         self.directory_status = ttk.Label(self.list_tab, padding=12)
         self.directory_status.pack(fill='x')
         self.sort_reverse = {}
+        self.setup_categories(read_settings().get('profile_categories', {}))
         self.refresh_directory()
+
+    def save_category_settings(self, value):
+        save_setting('profile_categories', value)
 
     def open_directory(self):
         selected = filedialog.askdirectory(title='Open profile directory', initialdir=self.directory)
@@ -400,23 +415,20 @@ class Inspector(tk.Tk):
 
     def refresh_directory(self):
         self.directory_label.config(text=self.directory)
-        self.list_paths = {}
-        for item in self.profile_list.get_children(): self.profile_list.delete(item)
         try:
             rows = directory_entries(self.directory)
-            for i, (path, values) in enumerate(rows):
-                key = str(i)
-                self.list_paths[key] = path
-                self.profile_list.insert('', 'end', iid=key, values=values)
+            self.render_library(rows)
             count = sum(values[-1] == 'ICC profile' for _, values in rows)
-            self.directory_status.config(text=f'{len(rows)} items • {count} ICC profiles • Double-click a profile to inspect it; double-click a folder to browse.')
+            self.directory_status.config(text=f'{len(rows)} items • {count} ICC profiles • Check profiles to create a category, or drag profiles onto a category. Click a category name to rename; use its arrow to expand/collapse.')
         except OSError as exc:
+            self.render_library([])
             self.directory_status.config(text=f'Cannot read directory: {exc} • Use Open Directory to choose another folder.')
 
     def sort_directory(self, column):
         reverse = self.sort_reverse.get(column, False)
-        rows = sorted(self.profile_list.get_children(), key=lambda i: self.profile_list.set(i, column).casefold(), reverse=reverse)
-        for index, item in enumerate(rows): self.profile_list.move(item, '', index)
+        for parent in self.profile_list.get_children():
+            rows = sorted(self.profile_list.get_children(parent), key=lambda i: self.profile_list.set(i, column).casefold(), reverse=reverse)
+            for index, item in enumerate(rows): self.profile_list.move(item, parent, index)
         self.sort_reverse[column] = not reverse
 
     def show_profile_menu(self, event):
@@ -425,10 +437,19 @@ class Inspector(tk.Tk):
             return
         self.profile_list.selection_set(item)
         self.profile_list.focus(item)
+        self.profile_menu.delete(0, 'end')
+        if item in self.category_rows:
+            self.profile_menu.add_command(label='Rename category…', command=lambda: self.begin_category_rename(item))
+            try:
+                self.profile_menu.tk_popup(event.x_root, event.y_root)
+            finally:
+                self.profile_menu.grab_release()
+            return
         path = self.list_paths.get(item)
         if path is None or path.suffix.lower() not in ('.icc', '.icm') or not path.is_file():
             return
-        self.profile_menu.delete(0, 'end')
+        if self.profile_list.parent(item) != 'uncategorized':
+            self.profile_menu.add_command(label='Move to Uncategorized', command=lambda p=path: self.move_profiles_to_category([str(p)], None))
         # Capture the clicked file so selection changes cannot redirect deletion.
         self.profile_menu.add_command(label='Delete profile…', command=lambda p=path: self.delete_profile(p))
         try:
@@ -451,6 +472,12 @@ class Inspector(tk.Tk):
         except OSError as exc:
             messagebox.showerror('Profile could not be deleted', f'{path}\n\n{exc}', parent=self)
             return
+        self.checked_profiles.discard(str(path))
+        categories = self.categories()
+        for category in categories:
+            category['files'] = [f for f in category['files'] if f.casefold() != path.name.casefold()]
+        if categories:
+            self.commit_categories(categories)
         if self.path and Path(self.path) == path:
             self.path = None
             self.primary = None
@@ -471,7 +498,13 @@ class Inspector(tk.Tk):
     def open_list_selection(self, event=None):
         selected = self.profile_list.selection()
         if not selected: return
-        path = self.list_paths[selected[0]]
+        if selected[0] in self.category_rows or selected[0] == 'uncategorized':
+            self.profile_list.item(selected[0], open=not self.profile_list.item(selected[0], 'open'))
+            self.remember_category_expansion()
+            return
+        path = self.list_paths.get(selected[0])
+        if path is None:
+            return
         if path.is_dir():
             self.directory = str(path)
             self.make_default.set(path == Path(self.default_directory))

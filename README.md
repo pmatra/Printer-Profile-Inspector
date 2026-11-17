@@ -14,6 +14,14 @@ Choose **Basic CPU** for the previous renderer. If hardware OpenGL or the requir
 
 The top tabs switch between **ICC/Gamut Inspector** and **Profile List**. The list initially reads `C:\Windows\System32\spool\drivers\color` and displays directory contents with Filename, Version, Device color space, Created, and Status columns. Created is the ICC header creation date, not the filesystem date. Click a column heading to sort. Double-click a profile to open it in the inspector; double-click a folder to browse into it.
 
+### Profile checkboxes and categories
+
+Every ICC/ICM profile has a checkbox in the left column. Check profiles and click **Create category from checked…**, then enter a category name. A collapsible category appears with those profiles inside it. With no profiles checked, the same button creates an empty category. Click the **Check** column heading to check/uncheck all profiles, including profiles inside collapsed categories; **Clear checks** clears the selection.
+
+Drag a profile's filename onto a category heading (or onto a profile inside that category) to organize it. If the dragged profile is checked, all checked profiles move together. The destination category highlights during the drag. Drop onto **Uncategorized** to remove the category assignment, or use the profile's right-click **Move to Uncategorized** option.
+
+Use the arrow beside a category to expand/collapse it. Click its name to rename it inline, then press Enter or click elsewhere to save; Escape cancels. **Rename category**, F2, and right-click **Rename category…** are also available. Categories and their expanded/collapsed state are saved per directory in `settings.json`, alongside your theme and default directory. These are virtual groups: organizing profiles never moves or rewrites the actual files. Each profile belongs to one category at a time; unmatched files and folders appear under Uncategorized.
+
 Right-click an ICC/ICM profile in **Profile List** and choose **Delete profile…**. A Yes/No confirmation shows the exact filename and full path, with **No** selected by default. **Yes** permanently deletes that file and refreshes the list. Files that Windows does not permit you to delete show an error and remain listed.
 
 On **Profile List**, use **Open Directory** to browse another folder, then check **Make this directory default** to use that folder on future launches. Unchecking restores the Windows color directory as the startup default. The preference is stored in `settings.json` beside the executable (or beside the Python source when running from source); keep the application in a writable folder. **Refresh** reloads the directory contents. Unreadable profiles remain listed with an explanatory status.
@@ -36,6 +44,8 @@ The complete application is implemented in `inspector.py`; the original referenc
 | --- | --- |
 | `inspector.py` | ICC parsing, profile directory browser, desktop interface, color transforms, 3D plotting, and export |
 | `gamut_gpu.py` | Hardware OpenGL viewport, smooth vertex-color surfaces, depth testing, and supersampling |
+| `profile_categories.py` | Profile checkboxes, virtual accordion categories, inline rename, and drag-and-drop |
+| `check_categories.py` | Category interaction, directory scoping, unchanged-file, and persistence checks |
 | `check_inspector.py` | Regression checks for profile parsing, color sampling, interface views, and saved defaults |
 | `check_gpu.py` | Hardware-rendering smoke test including real framebuffer pixels, view modes, resizing, and renderer switching |
 | `preview_list.py` | Launch the application with the Profile List tab selected |
@@ -45,6 +55,8 @@ The complete application is implemented in `inspector.py`; the original referenc
 | `.gitignore` | Exclude generated builds, local settings, and virtual environments |
 
 Run the existing regression checks with `python check_inspector.py` after installing the dependencies. These checks open desktop windows and require a graphical desktop. Additional checks use installed Windows printer profiles when available.
+
+Run `python check_categories.py` to check checkbox clicks, category creation, drag-and-drop, inline renaming, saved expansion state, and preservation of the original profile files.
 
 Run `python check_gpu.py` to verify actual hardware rendering. This test requires a supported GPU and fails explicitly if the program falls back to CPU rendering. Use `build.ps1` to package the app with dynamically loaded OpenGL modules included.
 
