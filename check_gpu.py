@@ -25,6 +25,7 @@ def run_check(module=None):
         gpu = app.gpu
         gpu.tkMakeCurrent()
         gpu.request_draw()
+        gpu.tkMakeCurrent()
         GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, gpu.target[0])
         width, height = gpu.target_size
         pixels = np.frombuffer(GL.glReadPixels(0,0,width,height,GL.GL_RGB,GL.GL_UNSIGNED_BYTE), dtype=np.uint8).reshape(height,width,3)
@@ -58,6 +59,7 @@ def run_check(module=None):
         app.select_renderer()
         app.update()
         assert gpu.winfo_ismapped() and not gpu.failed
+        gpu.tkMakeCurrent()
         GL.glFinish()
         assert GL.glGetError() == GL.GL_NO_ERROR
         app.destroy()

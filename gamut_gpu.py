@@ -1,5 +1,6 @@
 """OpenGL gamut viewport with smooth vertex colors and supersampled rendering."""
 import numpy as np
+import sys
 from OpenGL import GL
 from pyopengltk import OpenGLFrame
 
@@ -18,6 +19,26 @@ class GamutGPU(OpenGLFrame):
         self.bind('<B1-Motion>', owner.rotate)
         self.bind('<MouseWheel>', owner.wheel)
         self.bind('<Motion>', owner.hover)
+        self.bind('<Unmap>', lambda event: self.suspend_context())
+
+    def tkCreateContext(self):
+        super().tkCreateContext()
+        if sys.platform == 'win32':
+            from OpenGL import WGL
+            self.native_context = WGL.wglGetCurrentContext()
+            self.native_dc = WGL.wglGetCurrentDC()
+
+    def tkMakeCurrent(self):
+        if sys.platform == 'win32' and getattr(self, 'native_context', None):
+            from OpenGL import WGL
+            WGL.wglMakeCurrent(self.native_dc, self.native_context)
+        else:
+            super().tkMakeCurrent()
+
+    def suspend_context(self):
+        if sys.platform == 'win32':
+            from OpenGL import WGL
+            WGL.wglMakeCurrent(None, None)
 
     def tkMap(self, event):
         try:
@@ -60,6 +81,8 @@ class GamutGPU(OpenGLFrame):
                 self.tkSwapBuffers()
             except Exception as exc:
                 self.fail(exc)
+            finally:
+                self.suspend_context()
 
     def request_draw(self):
         if self.ready and self.winfo_ismapped():
@@ -177,4 +200,14 @@ class GamutGPU(OpenGLFrame):
                 self.release_target()
             except Exception:
                 pass
+        if sys.platform == 'win32' and getattr(self, 'native_context', None):
+            from OpenGL import WGL
+            import ctypes
+            self.suspend_context()
+            WGL.wglDeleteContext(self.native_context)
+            release_dc = ctypes.windll.user32.ReleaseDC
+            release_dc.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+            release_dc.restype = ctypes.c_int
+            release_dc(self.winfo_id(), self.native_dc)
+            self.native_context = None
         super().destroy()
