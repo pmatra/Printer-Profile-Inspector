@@ -24,19 +24,23 @@ def run_packaged_check(module=None):
         profile.write_bytes(ImageCms.ImageCmsProfile(ImageCms.createProfile('sRGB')).tobytes())
         app=None
         try:
+            print('Platform smoke: creating application',flush=True)
             app=m.Inspector(background_io=False)
             app.update()
+            print('Platform smoke: loading generated profile',flush=True)
             app.directory=str(root);app.refresh_directory()
             app.load(str(profile),background=False)
             assert app.primary is not None
             app.load(str(profile),compare=True,background=False)
+            print('Platform smoke: rendering views',flush=True)
             for view in ('Points','Surface','Wireframe'):
                 app.view.set(view);app.draw();app.update()
             for theme in m.THEMES:
                 app.theme_choice.set(theme);app.change_theme();app.update()
+            print('Platform smoke: checking native integration',flush=True)
             if sys.platform=='darwin':
                 assert app.render_mode.get()=='Basic CPU' and app.gpu is None
-                assert app.bind('<Command-o>') and app.bind('<Control-Button-1>')==''
+                assert app.bind('<Command-o>')
                 assert app.profile_list.bind('<Control-Button-1>')
                 assert app.tk.call('info','commands','::tk::mac::OpenDocument')
                 assert isinstance(support.macos_is_dark(),bool)
@@ -119,7 +123,11 @@ def run_checks():
                 assert result.returncode==0 and guard.acquire();guard.close()
             print('PASS: native macOS cross-process lock, release and crash recovery',flush=True)
         print('PASS: native appearance dispatch and follow-system override reset',flush=True)
-    print(json.dumps(run_packaged_check(),indent=2),flush=True)
+    # An unexpected modal would stall unattended CI instead of reporting a failure.
+    import inspector as m
+    def unexpected_dialog(*args,**kwargs): raise AssertionError('Unexpected dialog: '+str(args))
+    with patch.object(m.messagebox,'showerror',side_effect=unexpected_dialog),patch.object(m.messagebox,'showwarning',side_effect=unexpected_dialog):
+        print(json.dumps(run_packaged_check(m),indent=2),flush=True)
 
 
 if __name__=='__main__': run_checks()

@@ -40,7 +40,9 @@ app = BUNDLE(coll, name='ICC Profile Inspector.app', icon=None, bundle_identifie
     application=dist/'ICC Profile Inspector.app';binary=application/'Contents/MacOS/ICC Profile Inspector'
     subprocess.run(['codesign','--verify','--deep','--strict',str(application)],check=True)
     report=staging/'packaged-check.json'
-    subprocess.run([str(binary),'--platform-check',str(report)],check=True,timeout=120)
+    checked=subprocess.run([str(binary),'--platform-check',str(report)],timeout=120)
+    if report.exists(): print(report.read_text(),flush=True)
+    if checked.returncode: raise RuntimeError('Packaged macOS smoke test failed; see diagnostic report above.')
     result=json.loads(report.read_text());assert result['passed'] and result['renderer']=='Basic CPU'
     subprocess.run([str(binary),'--version'],check=True,timeout=30)
     archive=dist/f'ICC-Profile-Inspector-macOS-{arch}-v{__version__}.zip'
