@@ -32,6 +32,7 @@ jobs:
       - name: Lint
         run: python -m ruff check .
       - name: Native macOS platform checks
+        timeout-minutes: 4
         run: python check_platform.py
       - name: Profile/category regression checks
         run: python check_categories.py

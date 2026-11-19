@@ -130,4 +130,9 @@ def run_checks():
         print(json.dumps(run_packaged_check(m),indent=2),flush=True)
 
 
-if __name__=='__main__': run_checks()
+if __name__=='__main__':
+    import faulthandler
+    faulthandler.enable()
+    faulthandler.dump_traceback_later(30,repeat=True)
+    try: run_checks()
+    finally: faulthandler.cancel_dump_traceback_later()
