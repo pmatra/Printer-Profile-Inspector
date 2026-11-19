@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 from PIL import ImageCms
+from test_event_loop import configure_test_events
 import inspector as m
 import profile_categories as categories
 
@@ -21,7 +22,7 @@ with tempfile.TemporaryDirectory() as directory:
     for name in ('one.icc', 'two.icc', 'three.icm'):
         (profiles / name).write_bytes(data)
     (profiles / 'note.txt').write_text('not a profile')
-    app = m.Inspector(background_io=False)
+    app = configure_test_events(m.Inspector(background_io=False))
     app.directory = str(profiles)
     app.refresh_directory()
     app.main_tabs.select(app.list_tab)

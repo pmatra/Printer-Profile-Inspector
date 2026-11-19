@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 import uuid
 from PIL import ImageCms
+from test_event_loop import native_events
 import app_support as support
 
 
@@ -26,7 +27,7 @@ def run_packaged_check(module=None):
         try:
             print('Platform smoke: creating application',flush=True)
             app=m.Inspector(background_io=False)
-            app.update()
+            native_events(app)
             print('Platform smoke: loading generated profile',flush=True)
             app.directory=str(root);app.refresh_directory()
             app.load(str(profile),background=False)
@@ -34,9 +35,9 @@ def run_packaged_check(module=None):
             app.load(str(profile),compare=True,background=False)
             print('Platform smoke: rendering views',flush=True)
             for view in ('Points','Surface','Wireframe'):
-                app.view.set(view);app.draw();app.update()
+                app.view.set(view);app.draw();native_events(app)
             for theme in m.THEMES:
-                app.theme_choice.set(theme);app.change_theme();app.update()
+                app.theme_choice.set(theme);app.change_theme();native_events(app)
             print('Platform smoke: checking native integration',flush=True)
             if sys.platform=='darwin':
                 assert app.render_mode.get()=='Basic CPU' and app.gpu is None

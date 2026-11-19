@@ -137,7 +137,9 @@ class ProfileCategories:
             messagebox.showinfo('Recover categories','No other saved folder locations are available.',parent=self); return
         old=simpledialog.askstring('Recover categories','If a folder moved/was renamed, copy its saved categories here. Files are matched by exact filename; no files are moved.\n\nSaved folder locations:\n'+'\n'.join(locations)+'\n\nEnter the old folder location:',parent=self)
         if not old: return
-        key=directory_key(old)
+        # Imported settings may contain Windows paths on a Mac (or vice versa).
+        # An explicitly selected saved key must not be reinterpreted by this OS.
+        key=old if old in self.category_store else directory_key(old)
         if key not in self.category_store:
             messagebox.showerror('Unknown saved folder','Choose one of the saved locations listed.',parent=self); return
         if self.categories() and not messagebox.askyesno('Replace current category assignments?', 'Replace this folder’s category assignments with the selected saved location? ICC files and the old location’s saved categories are preserved.',default=messagebox.NO,parent=self): return

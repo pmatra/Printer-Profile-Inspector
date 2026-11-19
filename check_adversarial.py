@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 import numpy as np
 from scipy.spatial import ConvexHull
+from test_event_loop import configure_test_events
 import inspector as m
 from gamut_analysis import hull_metrics
 from profile_categories import directory_key
@@ -66,7 +67,7 @@ if __name__=='__main__':
         assert any(s.startswith('Sampling ICC transform:') for s in progress)
         print('PASS: header-only listing, complete primary/comparison CSV and cooperative sampling/export cancellation',flush=True)
         m.SETTINGS_PATH=root/'settings.json'
-        app=m.Inspector(background_io=False)
+        app=configure_test_events(m.Inspector(background_io=False))
         try:
             app.directory=str(profiles);app.refresh_directory()
             # Simulate distinct names even on a case-insensitive Windows filesystem.
