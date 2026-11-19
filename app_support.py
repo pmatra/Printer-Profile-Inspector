@@ -1,4 +1,4 @@
-"""Crash-safe preferences, Windows single-instance guard, and profile operations."""
+"""Crash-safe preferences and native Windows/macOS application services."""
 import ctypes
 import hashlib
 import json
@@ -9,9 +9,12 @@ import tempfile
 import time
 
 APP_TITLE = 'ICC Profile Inspector'
+BUNDLE_ID = 'design.petermatra.icc-profile-inspector'
 
 
 def settings_path():
+    if sys.platform == 'darwin':
+        return Path.home() / 'Library' / 'Application Support' / 'PrinterProfileICCInspector' / 'settings.json'
     base = Path(os.environ.get('APPDATA', Path.home() / 'AppData' / 'Roaming'))
     return base / 'PrinterProfileICCInspector' / 'settings.json'
 
@@ -106,13 +109,27 @@ class SettingsStore:
 class SingleInstance:
     def __init__(self, name=None):
         self.handle = None
+        self.lock_file = None
         user = os.environ.get('USERPROFILE', os.environ.get('USERNAME', 'user'))
         token = hashlib.sha256(user.casefold().encode()).hexdigest()[:20]
         self.name = name or 'Global\\PrinterProfileICCInspector-' + token
+        if sys.platform=='darwin': self.name=name or BUNDLE_ID
 
     def acquire(self):
+        if self.handle or self.lock_file: return True
         if sys.platform != 'win32':
-            raise OSError('This build supports single-instance operation on Windows only.')
+            import fcntl
+            path=self.lock_path()
+            path.parent.mkdir(parents=True,exist_ok=True)
+            stream=path.open('a+')
+            try: fcntl.flock(stream.fileno(),fcntl.LOCK_EX|fcntl.LOCK_NB)
+            except BlockingIOError:
+                stream.close();return False
+            except Exception:
+                stream.close();raise
+            self.lock_file=stream
+            stream.seek(0);stream.truncate();stream.write(str(os.getpid()));stream.flush()
+            return True
         kernel = ctypes.WinDLL('kernel32', use_last_error=True)
         kernel.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_wchar_p]
         kernel.CreateMutexW.restype = ctypes.c_void_p
@@ -126,7 +143,16 @@ class SingleInstance:
             return False
         return True
 
+    def lock_path(self):
+        token=hashlib.sha256(self.name.encode()).hexdigest()[:20]
+        return settings_path().parent / ('instance-'+token+'.lock')
+
     def close(self):
+        if self.lock_file:
+            import fcntl
+            fcntl.flock(self.lock_file.fileno(),fcntl.LOCK_UN)
+            self.lock_file.close();self.lock_file=None
+            # Never unlink a flock file: another process may already hold its inode.
         if self.handle:
             kernel = ctypes.WinDLL('kernel32', use_last_error=True)
             kernel.CloseHandle.argtypes = [ctypes.c_void_p]
@@ -135,6 +161,7 @@ class SingleInstance:
 
 
 def color_directory():
+    if sys.platform == 'darwin': return Path('/Library/ColorSync/Profiles')
     if sys.platform == 'win32':
         library = ctypes.WinDLL('mscms', use_last_error=True)
         library.GetColorDirectoryW.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.POINTER(ctypes.c_uint32)]
@@ -145,13 +172,38 @@ def color_directory():
     return Path(os.environ.get('WINDIR', r'C:\Windows')) / 'System32' / 'spool' / 'drivers' / 'color'
 
 
+def profile_directories():
+    if sys.platform=='darwin':
+        return [('My profiles',Path.home()/'Library/ColorSync/Profiles'),
+                ('Shared profiles',Path('/Library/ColorSync/Profiles')),
+                ('Apple profiles (read-only)',Path('/System/Library/ColorSync/Profiles'))]
+    return [('Windows color profiles',color_directory())]
+
+
+def installation_directory():
+    return Path.home()/'Library/ColorSync/Profiles' if sys.platform=='darwin' else color_directory()
+
+
 def install_profile(path):
     path = Path(path).resolve()
-    destination = color_directory() / path.name
+    directory=installation_directory()
+    destination = directory / path.name
     if destination.exists():
         if destination.read_bytes() == path.read_bytes():
             return destination
         raise FileExistsError(f'A different profile already exists at {destination}. It was not overwritten.')
+    if sys.platform=='darwin':
+        directory.mkdir(parents=True,exist_ok=True)
+        fd,temporary=tempfile.mkstemp(prefix='.icc-install-',suffix='.tmp',dir=directory)
+        try:
+            with os.fdopen(fd,'wb') as stream:
+                stream.write(path.read_bytes());stream.flush();os.fsync(stream.fileno())
+            # Atomic publication WITHOUT replacing an existing file, including a
+            # collision created by another process while the copy was being written.
+            os.link(temporary,destination)
+        finally:
+            os.unlink(temporary)
+        return destination
     library = ctypes.WinDLL('mscms', use_last_error=True)
     library.InstallColorProfileW.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p]
     library.InstallColorProfileW.restype = ctypes.c_int
@@ -164,6 +216,8 @@ def install_profile(path):
 
 def recycle_profile(path):
     path = Path(path).absolute()
+    if sys.platform=='darwin' and path.resolve().is_relative_to(Path('/System')):
+        raise PermissionError('macOS manages the profiles under /System. They cannot be moved to Trash by this application.')
     if sys.platform == 'win32':
         drive_type = ctypes.windll.kernel32.GetDriveTypeW
         drive_type.argtypes = [ctypes.c_wchar_p]
@@ -173,14 +227,26 @@ def recycle_profile(path):
     try:
         if sys.platform=='win32':
             from send2trash.win.modern import send2trash
+        elif sys.platform=='darwin':
+            from send2trash.mac.modern import send2trash
         else:
             from send2trash import send2trash
     except ImportError as exc:
-        raise OSError('Recycle Bin support is unavailable. The profile was not deleted.') from exc
+        raise OSError('Native Trash/Recycle Bin support is unavailable. The profile was not deleted.') from exc
     send2trash(str(path))  # Errors propagate; there is no permanent-deletion fallback.
 
 
 def raise_existing_window():
+    if sys.platform=='darwin':
+        from AppKit import NSRunningApplication, NSApplicationActivateIgnoringOtherApps
+        try:
+            pid=int(SingleInstance().lock_path().read_text())
+            application=NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
+            if application:
+                application.unhide()
+                return bool(application.activateWithOptions_(NSApplicationActivateIgnoringOtherApps))
+        except (OSError,ValueError): pass
+        return False
     user = ctypes.windll.user32
     user.FindWindowW.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p]
     user.FindWindowW.restype = ctypes.c_void_p
@@ -193,3 +259,15 @@ def raise_existing_window():
         user.SetForegroundWindow(hwnd)
     else:
         user.MessageBoxW(None, 'ICC Profile Inspector is already running. Use its existing window.', APP_TITLE, 0x40)
+
+
+def macos_is_dark():
+    from AppKit import NSApplication, NSAppearanceNameAqua, NSAppearanceNameDarkAqua
+    appearance=NSApplication.sharedApplication().effectiveAppearance()
+    return appearance.bestMatchFromAppearancesWithNames_([NSAppearanceNameAqua,NSAppearanceNameDarkAqua])==NSAppearanceNameDarkAqua
+
+
+def set_macos_appearance(mode):
+    from AppKit import NSApplication, NSAppearance, NSAppearanceNameAqua, NSAppearanceNameDarkAqua
+    name=NSAppearanceNameDarkAqua if mode=='Dark' else NSAppearanceNameAqua
+    NSApplication.sharedApplication().setAppearance_(None if mode=='Follow macOS' else NSAppearance.appearanceNamed_(name))

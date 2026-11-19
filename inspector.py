@@ -23,11 +23,13 @@ from scipy.spatial import ConvexHull, cKDTree
 from PIL import Image, ImageCms
 from profile_categories import ProfileCategories
 from app_support import SettingsStore, settings_path, SingleInstance, raise_existing_window, APP_TITLE, color_directory, recycle_profile, install_profile
+from app_support import profile_directories, installation_directory, macos_is_dark, set_macos_appearance
 from icc_tags import decode_tag, TAG_NAMES
 from ui_style import system_font, shaded_buttons
 from version import __version__
 from gamut_analysis import hull_metrics
 try:
+    if sys.platform=='darwin': raise ImportError('The initial macOS build uses the CPU renderer.')
     from gamut_gpu import GamutGPU
     GPU_IMPORT_ERROR = ''
 except ImportError as exc:
@@ -39,7 +41,8 @@ DEFAULT_DIRECTORY = color_directory()
 LEGACY_SETTINGS_PATH = Path(sys.executable if getattr(sys, 'frozen', False) else __file__).resolve().parent / 'settings.json'
 SETTINGS_PATH = settings_path()
 SETTINGS_NOTICES = []
-THEMES = ('Windows Light', 'Windows Dark', 'Follow Windows')
+THEMES = ('Light','Dark','Follow macOS') if sys.platform=='darwin' else ('Windows Light', 'Windows Dark', 'Follow Windows')
+TRASH_NAME = 'Trash' if sys.platform=='darwin' else 'Recycle Bin'
 WORK_CONTEXT = local()
 
 class WorkCancelled(Exception):
@@ -72,6 +75,7 @@ def save_setting(key, value):
     SettingsStore(SETTINGS_PATH, LEGACY_SETTINGS_PATH if SETTINGS_PATH == settings_path() else None, SETTINGS_NOTICES).update(key, value)
 
 def windows_is_dark():
+    if sys.platform=='darwin': return macos_is_dark()
     try:
         import winreg
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
@@ -244,6 +248,7 @@ def write_samples_csv(path, results):
 class Inspector(ProfileCategories, tk.Tk):
     def __init__(self, background_io=True):
         super().__init__()
+        self.protocol('WM_DELETE_WINDOW',self.destroy)
         self.title(APP_TITLE)
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='icc-sampling')
         self.io_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix='icc-files')
@@ -266,8 +271,9 @@ class Inspector(ProfileCategories, tk.Tk):
         self.geometry('1280x820')
         self.minsize(980, 650)
         self.configure(bg='#111720')
-        preference = read_settings().get('theme', 'Follow Windows')
-        self.theme_choice = tk.StringVar(value=preference if preference in THEMES else 'Follow Windows')
+        preference = read_settings().get('theme', THEMES[-1])
+        if sys.platform=='darwin': preference=dict(zip(('Windows Light','Windows Dark','Follow Windows'),THEMES)).get(preference,preference)
+        self.theme_choice = tk.StringVar(value=preference if preference in THEMES else THEMES[-1])
         self.active_dark = None
         style = ttk.Style(self)
         self.ui_family, self.ui_size = system_font(self)
@@ -284,7 +290,7 @@ class Inspector(ProfileCategories, tk.Tk):
         self.yaw, self.pitch, self.zoom = .65, -.35, 1.8
         self.intent = tk.StringVar(value=INTENTS[1])
         self.density = tk.StringVar(value='17')
-        self.render_mode = tk.StringVar(value='High GPU')
+        self.render_mode = tk.StringVar(value='Basic CPU' if sys.platform=='darwin' else 'High GPU')
         self.gpu = None
         self.view = tk.StringVar(value='Surface')
         self.xray = tk.BooleanVar(value=True)
@@ -312,7 +318,7 @@ class Inspector(ProfileCategories, tk.Tk):
         render_controls.pack(fill='x')
         ttk.Label(render_controls, text='Renderer').pack(side='left', padx=(0, 8))
         renderer_box = ttk.Combobox(render_controls, textvariable=self.render_mode,
-                                   values=['High GPU', 'Basic CPU'], state='readonly', width=14)
+                                   values=['Basic CPU'] if sys.platform=='darwin' else ['High GPU', 'Basic CPU'], state='readonly', width=14)
         renderer_box.pack(side='left')
         renderer_box.bind('<<ComboboxSelected>>', self.select_renderer)
         ttk.Checkbutton(render_controls, text='X-ray comparison', variable=self.xray, command=self.draw).pack(side='left', padx=10)
@@ -361,6 +367,12 @@ class Inspector(ProfileCategories, tk.Tk):
         self.status = ttk.Label(self.inspector_tab, text='Drag to rotate • Scroll to zoom • Hover a point for Lab values', padding=12)
         self.status.pack(fill='x')
         self.bind('<Control-o>', lambda e: self.open())
+        if sys.platform=='darwin':
+            self.bind('<Command-o>',lambda e:self.open())
+            self.bind('<Command-comma>',lambda e:self.show_settings())
+            self.createcommand('::tk::mac::OpenDocument',self.open_documents)
+            self.createcommand('::tk::mac::ReopenApplication',self.show_application)
+            self.createcommand('::tk::mac::Quit',self.destroy)
         self.build_list_tab()
         self.settings_menu = tk.Menu(self, tearoff=False)
         self.theme_menu = tk.Menu(self.settings_menu, tearoff=False)
@@ -413,6 +425,13 @@ class Inspector(ProfileCategories, tk.Tk):
     def show_about(self):
         messagebox.showinfo('About ICC Profile Inspector',f'ICC Profile Inspector {__version__}\n\nCopyright © 2026 Peter Matra\nMIT license; dependencies retain their own licenses.\n\nGamut surfaces and volumes are sampled convex-hull approximations.',parent=self)
 
+    def show_application(self,*args):
+        self.deiconify();self.lift();self.focus_force()
+
+    def open_documents(self,*paths):
+        self.show_application()
+        if paths: self.after_idle(lambda:self.load(paths[0]))
+
     def cancel_work(self):
         for token in self.job_tokens.values(): token.set()
         for slot in self.job_generation: self.job_generation[slot]+=1
@@ -424,6 +443,7 @@ class Inspector(ProfileCategories, tk.Tk):
         self.cancel_button.config(state='disabled')
 
     def select_renderer(self, event=None):
+        if sys.platform=='darwin': self.render_mode.set('Basic CPU')
         if self.render_mode.get() == 'High GPU':
             if GamutGPU is None:
                 self.gpu_failed(f'OpenGL libraries are unavailable: {GPU_IMPORT_ERROR}')
@@ -443,7 +463,7 @@ class Inspector(ProfileCategories, tk.Tk):
             if self.gpu is not None:
                 self.gpu.pack_forget()
             self.canvas.pack(fill='both', expand=True)
-            self.gpu_label.config(text='Basic CPU • Flat triangle rendering')
+            self.gpu_label.config(text='Basic CPU • macOS software rendering' if sys.platform=='darwin' else 'Basic CPU • Flat triangle rendering')
         self.draw()
 
     def gpu_failed(self, reason):
@@ -463,15 +483,16 @@ class Inspector(ProfileCategories, tk.Tk):
         self.apply_theme()
 
     def watch_windows_theme(self):
-        if self.theme_choice.get() == 'Follow Windows':
+        if self.theme_choice.get() == THEMES[-1]:
             dark = windows_is_dark()
             if dark != self.active_dark:
                 self.apply_theme()
         self.after(1500, self.watch_windows_theme)
 
     def apply_theme(self):
-        self.active_dark = (windows_is_dark() if self.theme_choice.get() == 'Follow Windows'
-                            else self.theme_choice.get() == 'Windows Dark')
+        if sys.platform=='darwin': set_macos_appearance(self.theme_choice.get())
+        self.active_dark = (windows_is_dark() if self.theme_choice.get() == THEMES[-1]
+                            else self.theme_choice.get() == THEMES[1])
         if self.active_dark:
             self.colors = dict(bg='#202020', panel='#292929', field='#1b1b1b', text='#f2f2f2',
                                muted='#bfbfbf', border='#555555', hover='#3c3c3c', selected='#005a9e',
@@ -553,6 +574,11 @@ class Inspector(ProfileCategories, tk.Tk):
         toolbar = ttk.Frame(self.list_tab, padding=12)
         toolbar.pack(fill='x')
         ttk.Button(toolbar, text='Open Directory…', command=self.open_directory).pack(side='left')
+        if sys.platform=='darwin':
+            locations=ttk.Menubutton(toolbar,text='Profile locations')
+            menu=tk.Menu(locations,tearoff=False)
+            for label,path in profile_directories(): menu.add_command(label=label,command=lambda p=path:self.choose_profile_location(p))
+            locations.configure(menu=menu);locations.pack(side='left',padx=8)
         self.make_default = tk.BooleanVar(value=True)
         ttk.Checkbutton(toolbar, text='Make this directory default', variable=self.make_default,
                         command=self.save_default_directory).pack(side='left', padx=16)
@@ -596,6 +622,9 @@ class Inspector(ProfileCategories, tk.Tk):
         self.profile_list.bind('<Return>', self.open_list_selection)
         self.profile_menu = tk.Menu(self, tearoff=False)
         self.profile_list.bind('<Button-3>', self.show_profile_menu)
+        if sys.platform=='darwin':
+            self.profile_list.bind('<Button-2>',self.show_profile_menu)
+            self.profile_list.bind('<Control-Button-1>',lambda event:(self.show_profile_menu(event),'break')[1])
         self.directory_status = ttk.Label(self.list_tab, padding=12)
         self.directory_status.pack(fill='x')
         self.sort_reverse = {}
@@ -620,13 +649,15 @@ class Inspector(ProfileCategories, tk.Tk):
         self.directory_status.config(text=f'{len(self.list_paths)} matching items • {len(self.checked_profiles)} checked (including hidden matches). Clear Search to show every profile.')
 
     def install_selected_profile(self):
-        selected = filedialog.askopenfilename(title='Install ICC profile into Windows', filetypes=[('ICC profiles','*.icc *.icm')])
+        selected = filedialog.askopenfilename(title='Install ICC profile for this user' if sys.platform=='darwin' else 'Install ICC profile into Windows', filetypes=[('ICC profiles','*.icc *.icm')])
         if not selected: return
         path = Path(selected).resolve()
         try:
             read_profile(path); ImageCms.getOpenProfile(str(path))
             destination = install_profile(path)
-        except PermissionError:
+        except PermissionError as exc:
+            if sys.platform=='darwin':
+                messagebox.showerror('Profile was not installed',f'Cannot write to your user ColorSync profile folder:\n\n{installation_directory()}\n\n{exc}',parent=self);return
             if messagebox.askyesno('Administrator approval required', 'Windows requires administrator approval to install this profile. Request approval now?', default=messagebox.NO,parent=self):
                 self.install_elevated(path)
             return
@@ -635,13 +666,23 @@ class Inspector(ProfileCategories, tk.Tk):
         self.install_finished(destination)
 
     def install_finished(self,destination):
-        self.directory = str(DEFAULT_DIRECTORY)
+        self.directory = str(Path(destination).parent)
         self.search_text.set('')
         self.make_default.set(Path(self.directory)==Path(self.default_directory))
         self.refresh_directory()
-        messagebox.showinfo('Profile installed',f'Installed in the Windows color directory:\n\n{destination}\n\nNo printer default or device association was changed.',parent=self)
+        messagebox.showinfo('Profile installed',f'Installed in {"your user ColorSync profile folder" if sys.platform=="darwin" else "the Windows color directory"}:\n\n{destination}\n\nNo printer default or device association was changed.',parent=self)
+
+    def choose_profile_location(self,path):
+        try:
+            if path==installation_directory() and sys.platform=='darwin': path.mkdir(parents=True,exist_ok=True)
+        except OSError as exc:
+            messagebox.showerror('Cannot open profile folder',str(exc),parent=self);return
+        self.directory=str(path)
+        self.make_default.set(Path(self.directory)==Path(self.default_directory))
+        self.refresh_directory()
 
     def install_elevated(self,path):
+        if sys.platform!='win32': raise OSError('Administrator installation is only available on Windows. macOS installs into the user ColorSync folder.')
         import ctypes
         result = Path(tempfile.mkdtemp(prefix='icc-install-'))/'result.json'
         args = (['--install-profile',str(path),'--install-result',str(result)] if getattr(sys,'frozen',False)
@@ -736,7 +777,7 @@ class Inspector(ProfileCategories, tk.Tk):
         if self.profile_list.parent(item) != 'uncategorized':
             self.profile_menu.add_command(label='Move to Uncategorized', command=lambda p=path: self.move_profiles_to_category([str(p)], None))
         # Capture the clicked file so selection changes cannot redirect deletion.
-        self.profile_menu.add_command(label='Move profile to Recycle Bin…', command=lambda p=path: self.delete_profile(p))
+        self.profile_menu.add_command(label=f'Move profile to {TRASH_NAME}…', command=lambda p=path: self.delete_profile(p))
         try:
             self.profile_menu.tk_popup(event.x_root, event.y_root)
         finally:
@@ -749,7 +790,7 @@ class Inspector(ProfileCategories, tk.Tk):
             self.refresh_directory()
             return
         if not messagebox.askyesno('Delete profile?',
-                                  f'Move this specific profile to the Recycle Bin?\n\n{path.name}\n\n{path}\n\nYou can restore it from the Windows Recycle Bin.'+ ('\n\nWARNING: This is a system color profile. Removing it may affect printing or applications that use it.' if path.resolve().parent==DEFAULT_DIRECTORY.resolve() else ''),
+                                  f'Move this specific profile to {TRASH_NAME}?\n\n{path.name}\n\n{path}\n\nYou can restore it from {TRASH_NAME}.'+ ('\n\nWARNING: This is a shared/system color profile. Removing it may affect printing or applications that use it.' if path.resolve().parent==DEFAULT_DIRECTORY.resolve() else ''),
                                   icon='warning', default=messagebox.NO, parent=self):
             return
         try:
@@ -773,7 +814,7 @@ class Inspector(ProfileCategories, tk.Tk):
             self.tagdata = []
             self.settext(self.header, 'The loaded profile was deleted.')
             self.settext(self.raw, '')
-            self.settext(self.tag_details,'The loaded profile was moved to the Recycle Bin.')
+            self.settext(self.tag_details,f'The loaded profile was moved to {TRASH_NAME}.')
             self.tag_curves=[]; self.render_tag_plot()
             for item in self.tags.get_children():
                 self.tags.delete(item)
@@ -782,7 +823,7 @@ class Inspector(ProfileCategories, tk.Tk):
         if self.comparison and Path(self.comparison['path']) == path:
             self.comparison = None
         self.refresh_directory()
-        self.directory_status.config(text=f'Moved to Recycle Bin: {path.name}')
+        self.directory_status.config(text=f'Moved to {TRASH_NAME}: {path.name}')
         self.draw()
 
     def open_list_selection(self, event=None):
@@ -1048,12 +1089,22 @@ def main(initial_list=False):
     try:
         app=Inspector()
         if initial_list: app.main_tabs.select(app.list_tab)
-        if len(sys.argv)>1: app.after(100,lambda:app.load(sys.argv[1]))
+        paths=[value for value in sys.argv[1:] if not value.startswith('-psn_')]
+        if paths: app.after(100,lambda:app.load(paths[0]))
         app.mainloop()
     finally:
         guard.close()
 
 if __name__=='__main__':
+    if len(sys.argv)==3 and sys.argv[1]=='--platform-check':
+        from check_platform import run_packaged_check
+        try:
+            result=run_packaged_check(sys.modules[__name__])
+            Path(sys.argv[2]).write_text(json.dumps({'passed':True,**result},indent=2),encoding='utf-8')
+        except Exception as exc:
+            Path(sys.argv[2]).write_text(json.dumps({'passed':False,'error':str(exc)},indent=2),encoding='utf-8')
+            sys.exit(1)
+        sys.exit(0)
     if sys.argv[1:]==['--version']:
         if getattr(sys,'frozen',False) and sys.stdout is None:
             # Windowed bootloaders unset sys.stdout, even when the parent pipes

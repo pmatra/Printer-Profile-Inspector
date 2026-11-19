@@ -24,5 +24,7 @@ jobs:
         run: python check_upgrade.py
       - name: Adversarial-review regressions
         run: python check_adversarial.py
+      - name: Platform dispatch checks
+        run: python check_platform.py
       # Hosted Windows VMs may expose software OpenGL only. Hardware pixel tests
       # remain a required manual release check on a real GPU, not a skipped pass.

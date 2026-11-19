@@ -4,7 +4,11 @@
 
 [Download the latest Windows release](https://github.com/pmatra/Printer-Profile-Inspector/releases/latest)
 
-Windows ICC printer-profile inspection, organization, and interactive D50 CIELAB gamut comparison. Extract the complete Windows ZIP and run **ICC Gamut Inspector.exe**. Keep `_internal` beside it. Python is not required for the packaged app.
+Windows/macOS ICC printer-profile inspection, organization, and interactive D50 CIELAB gamut comparison. Extract the complete Windows ZIP and run **ICC Gamut Inspector.exe**. Keep `_internal` beside it. Python is not required for the packaged app.
+
+## macOS preview
+
+The macOS port uses CPU rendering, native settings/profile locations, user-level installation, Trash, system appearance and single-instance protection. Separate Apple Silicon and Intel app ZIPs are built by [macOS Actions](https://github.com/pmatra/Printer-Profile-Inspector/actions/workflows/macos.yml). See [MACOS.md](MACOS.md) for build/download instructions and the non-notarized preview limitations. Windows release downloads above remain separate.
 
 ## Settings and single-instance operation
 
@@ -71,7 +75,7 @@ Tested runtime: Python 3.12 on Windows. GUI tests need a graphical desktop; GPU 
 | Source | Purpose |
 | --- | --- |
 | `inspector.py` | UI, ICC parsing, background sampling, CPU renderer, export |
-| `app_support.py` | Atomic AppData preferences/recovery, Windows mutex, install, Recycle Bin |
+| `app_support.py` | Atomic platform preferences, Windows mutex/macOS file lock, native install/Trash/theme services |
 | `ui_style.py` | Windows system typography and shaded button surfaces |
 | `icc_tags.py` | Bounded ICC tag/curve/LUT decoders |
 | `gamut_gpu.py` | OpenGL rendering, X-ray comparison, supersampling |
@@ -84,6 +88,8 @@ Tested runtime: Python 3.12 on Windows. GUI tests need a graphical desktop; GPU 
 | `check_upgrade.py` | Recovery, cross-process mutex, search/sort, background jobs, install contract, tags |
 | `preview_list.py` | Normal single-instance startup on Profile List |
 | `build.ps1` | Windows packaging with required dynamic modules |
+| `build_macos.py`, `make_macos_notices.py` | Native app/ZIP packaging with runner-specific license texts |
+| `check_platform.py`, `requirements-macos.txt` | macOS integration checks and pinned Mac dependencies |
 | `requirements.txt`, `requirements-lock.txt` | Dependency ranges and tested versions |
 
 ```powershell
