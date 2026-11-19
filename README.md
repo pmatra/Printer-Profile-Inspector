@@ -62,7 +62,7 @@ Pillow/LittleCMS transforms RGB, CMYK, and gray profiles to D50 Lab where suppor
 
 **⚙ → About** displays the application version. `python inspector.py --version` prints it without opening the GUI; the packaged executable also supports `--version` with an inherited output handle/parent console. Windows file properties include FileVersion/ProductVersion generated from `version.py`.
 
-The Windows executable is unsigned. Windows SmartScreen may show an unrecognized-app warning, and security products may flag a PyInstaller build. Checksums verify file integrity; they do not establish publisher identity or replace code signing. Release signing remains future distribution work. Do not bypass a warning for a download you cannot verify.
+The Windows executable is unsigned. Windows SmartScreen may show an unrecognized-app warning, and security products may flag a PyInstaller build. Checksums verify file integrity; they do not establish publisher identity or replace code signing. A manual trusted-signing workflow is prepared; follow [SIGNING.md](SIGNING.md) to configure an approved Azure signing identity. The current downloadable executable remains unsigned until a verified signed artifact is published. Do not bypass a warning for a download you cannot verify.
 
 ## Development
 
@@ -99,7 +99,7 @@ python -m venv .venv
 .\build.ps1
 ```
 
-CI installs the locked dependencies plus `requirements-dev.txt`, runs Ruff correctness rules and all four functional check scripts. A hosted VM may lack hardware OpenGL; `check_gpu.py` is a separate release check on real hardware. A workflow file alone is not evidence of a successful remote run: inspect the linked Actions run after pushing. The fixed color fixture is generated sRGB; vendor printer profiles are not redistributed.
+CI installs the locked dependencies plus `requirements-dev.txt`, runs Ruff correctness rules and all four functional check scripts. A hosted VM may lack hardware OpenGL; `check_gpu.py` is a separate release check on real hardware. The [first remote CI run passed](https://github.com/pmatra/Printer-Profile-Inspector/actions/runs/44582598712); the live Actions badge above reports subsequent pushes. The fixed color fixture is generated sRGB; vendor printer profiles are not redistributed.
 
 The executable supports `--gpu-check <report.json>` for an isolated diagnostic using temporary preferences.
 

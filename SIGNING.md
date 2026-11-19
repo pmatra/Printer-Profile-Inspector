@@ -29,7 +29,7 @@ not guarantee instant SmartScreen reputation or eliminate antivirus warnings.
    Review the subscription, region and recurring price before Review + Create.
 4. Assign yourself the **Artifact Signing Identity Verifier** role if needed.
    Start **Public Trust / Individual developer** identity validation in the
-   account. Use your actual legal identity and complete Microsoft's requested
+   account. For Individual Developer validation, the Azure billing account must have Account Type **Individual**; its legal name and sold-to address must match the government ID used for validation. Review these details in Azure first. Use your actual legal identity and complete Microsoft's requested
    verification yourself in the portal. Do not send identity documents,
    passwords or payment details through this repository or chat.
 5. Wait for identity validation approval. It may require additional steps or
