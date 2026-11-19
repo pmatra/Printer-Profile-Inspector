@@ -359,7 +359,7 @@ class Inspector(ProfileCategories, tk.Tk):
         self.canvas.pack(fill='both', expand=True)
         self.plot_notice = tk.Label(right,text='Sampled convex-hull approximation • not an exact gamut boundary',anchor='w')
         self.plot_notice.place(x=12,rely=1,y=-10,anchor='sw')
-        self.canvas.bind('<Configure>', lambda e: self.draw())
+        self.canvas.bind('<Configure>', self.canvas_resized)
         self.canvas.bind('<ButtonPress-1>', lambda e: setattr(self, 'drag', (e.x, e.y)))
         self.canvas.bind('<B1-Motion>', self.rotate)
         self.canvas.bind('<MouseWheel>', self.wheel)
@@ -410,6 +410,11 @@ class Inspector(ProfileCategories, tk.Tk):
     def schedule_draw(self):
         if self.draw_pending is None:
             self.draw_pending = self.after(25, self.flush_draw)
+
+    def canvas_resized(self,event):
+        size=(event.width,event.height)
+        if size!=getattr(self,'last_canvas_size',None):
+            self.last_canvas_size=size;self.schedule_draw()
 
     def point_indices(self,result,maximum):
         return display_indices(result,maximum)
@@ -464,6 +469,7 @@ class Inspector(ProfileCategories, tk.Tk):
                 self.gpu.pack_forget()
             self.canvas.pack(fill='both', expand=True)
             self.gpu_label.config(text='Basic CPU • macOS software rendering' if sys.platform=='darwin' else 'Basic CPU • Flat triangle rendering')
+        self.plot_notice.lift()
         self.draw()
 
     def gpu_failed(self, reason):
@@ -991,7 +997,6 @@ class Inspector(ProfileCategories, tk.Tk):
         comparison_mode = ('CPU overlay' if self.render_mode.get()=='Basic CPU' else ('X-ray' if self.xray.get() else 'depth-tested'))
         comparison=(f"Comparison: {Path(self.comparison['path']).name} • cyan wireframe • "+comparison_mode) if self.comparison else 'No comparison'
         self.legend.config(text=f'Primary: {primary}  |  {comparison}')
-        self.plot_notice.lift()
         if self.render_mode.get() == 'High GPU' and self.gpu is not None:
             self.gpu.request_draw()
             return
