@@ -14,7 +14,7 @@ def run_check(module=None):
         m.SETTINGS_PATH = Path(directory) / 'settings.json'
         profile = Path(directory) / 'sRGB.icc'
         profile.write_bytes(ImageCms.ImageCmsProfile(ImageCms.createProfile('sRGB')).tobytes())
-        app = m.Inspector()
+        app = m.Inspector(background_io=False)
         app.update()
         app.load(str(profile), background=False)
         app.update()
@@ -60,6 +60,17 @@ def run_check(module=None):
         app.xray.set(True); visible=count_comparison()
         assert visible>100 and visible>hidden+100,(hidden,visible)
         assert GL.glIsEnabled(GL.GL_DEPTH_TEST), 'Primary depth testing must be restored'
+        # Force the old cache collision condition without relying on allocator luck.
+        replacement=cube(45)
+        gpu.mesh_cache[id(replacement)]=gpu.mesh_cache[id(app.primary)]
+        app.primary=replacement; gpu.request_draw()
+        assert gpu.mesh_cache[id(replacement)][3] is replacement
+        large=cube(750);app.primary=large;app.comparison=None;app.zoom=8
+        gpu.request_draw();gpu.tkMakeCurrent()
+        projected=app.project(large['points'])
+        assert np.max(np.abs(projected[:,2]))<gpu.depth_limit
+        assert gpu.depth_limit>500
+        app.reset()
         diagnostics['xray_comparison_pixels']=visible
         diagnostics['depth_tested_comparison_pixels']=hidden
         app.primary=original; app.comparison=None

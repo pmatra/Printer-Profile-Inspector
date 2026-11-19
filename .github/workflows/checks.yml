@@ -1,0 +1,28 @@
+name: Windows regression checks
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  checks:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12.4'
+          cache: pip
+      - name: Install tested dependencies and lint tool
+        run: python -m pip install -r requirements-lock.txt -r requirements-dev.txt
+      - name: Catch syntax and undefined-name errors
+        run: python -m ruff check .
+      - name: Application checks
+        run: python check_inspector.py
+      - name: Category interaction checks
+        run: python check_categories.py
+      - name: Settings and upgrade checks
+        run: python check_upgrade.py
+      - name: Adversarial-review regressions
+        run: python check_adversarial.py
+      # Hosted Windows VMs may expose software OpenGL only. Hardware pixel tests
+      # remain a required manual release check on a real GPU, not a skipped pass.

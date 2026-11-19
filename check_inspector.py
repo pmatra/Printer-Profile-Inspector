@@ -26,7 +26,7 @@ with tempfile.TemporaryDirectory() as d:
         try: m.read_profile(bad)
         except ValueError: pass
         else: raise AssertionError('Malformed ICC accepted')
-    app = m.Inspector()
+    app = m.Inspector(background_io=False)
     for theme in m.THEMES:
         app.theme_choice.set(theme)
         app.change_theme()
@@ -74,7 +74,7 @@ with tempfile.TemporaryDirectory() as d:
         question.assert_not_called()
     print('PASS: delete confirmation No/Yes, exact path, permission failure, list refresh and loaded-profile cleanup')
     app.destroy()
-    reopened = m.Inspector()
+    reopened = m.Inspector(background_io=False)
     assert reopened.theme_choice.get() == 'Windows Dark'
     assert reopened.active_dark
     assert reopened.directory == d, 'Default directory must survive restart'

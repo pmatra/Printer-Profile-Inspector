@@ -1,0 +1,108 @@
+name: Build and sign Windows app
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  sign:
+    if: github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    environment: release-signing
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Require configured signing identity
+        shell: pwsh
+        env:
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          SIGNING_ENDPOINT: ${{ vars.SIGNING_ENDPOINT }}
+          SIGNING_ACCOUNT_NAME: ${{ vars.SIGNING_ACCOUNT_NAME }}
+          SIGNING_CERTIFICATE_PROFILE: ${{ vars.SIGNING_CERTIFICATE_PROFILE }}
+        run: |
+          foreach ($name in @('AZURE_CLIENT_ID','AZURE_TENANT_ID','AZURE_SUBSCRIPTION_ID','SIGNING_ENDPOINT','SIGNING_ACCOUNT_NAME','SIGNING_CERTIFICATE_PROFILE')) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              throw "Configure $name in the release-signing environment first. See SIGNING.md."
+            }
+          }
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12.4'
+          cache: pip
+      - name: Install tested dependencies
+        run: python -m pip install -r requirements-lock.txt -r requirements-dev.txt
+      - name: Verify source before signing
+        shell: pwsh
+        run: |
+          python -m ruff check .
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($check in @('check_inspector.py','check_categories.py','check_upgrade.py','check_adversarial.py')) {
+            python $check
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - name: Build Windows application
+        shell: pwsh
+        run: .\build.ps1
+      - name: Azure login using GitHub OIDC
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Sign application executable and timestamp
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2
+        with:
+          endpoint: ${{ vars.SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ vars.SIGNING_CERTIFICATE_PROFILE }}
+          files: ${{ github.workspace }}\dist\ICC Gamut Inspector\ICC Gamut Inspector.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          exclude-environment-credential: true
+          exclude-workload-identity-credential: true
+          exclude-managed-identity-credential: true
+          exclude-shared-token-cache-credential: true
+          exclude-visual-studio-credential: true
+          exclude-visual-studio-code-credential: true
+          exclude-azure-cli-credential: false
+          exclude-azure-powershell-credential: true
+          exclude-azure-developer-cli-credential: true
+          exclude-interactive-browser-credential: true
+      - name: Verify trusted signature and package signed output
+        shell: pwsh
+        run: |
+          $application = Join-Path $PWD 'dist\ICC Gamut Inspector'
+          $signature = Get-AuthenticodeSignature -LiteralPath (Join-Path $application 'ICC Gamut Inspector.exe')
+          if ($signature.Status -ne 'Valid' -or -not $signature.TimeStamperCertificate) {
+            throw "Signed output failed verification: $($signature.Status) $($signature.StatusMessage)"
+          }
+          Write-Host "Verified publisher: $($signature.SignerCertificate.Subject)"
+          $version = python -c "from version import __version__; print(__version__)"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $zip = "ICC-Gamut-Inspector-Windows-v$version-signed.zip"
+          Compress-Archive -LiteralPath $application -DestinationPath $zip
+          $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLower()
+          Set-Content -LiteralPath SHA256SUMS-signed.txt -Value "$hash  $zip" -Encoding ascii
+          @{
+            commit = '${{ github.sha }}'
+            version = $version
+            publisher = $signature.SignerCertificate.Subject
+            thumbprint = $signature.SignerCertificate.Thumbprint
+            signatureStatus = $signature.Status.ToString()
+            timestamped = [bool]$signature.TimeStamperCertificate
+          } | ConvertTo-Json | Set-Content signing-verification.json -Encoding utf8
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: verified-signed-windows
+          if-no-files-found: error
+          path: |
+            *-signed.zip
+            SHA256SUMS-signed.txt
+            signing-verification.json

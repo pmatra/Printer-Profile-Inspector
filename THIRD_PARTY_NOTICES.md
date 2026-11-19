@@ -1,6 +1,6 @@
 # Third-party notices
 
-ICC Profile Inspector v0.5.2 — Windows distribution, prepared 2026-11-18.
+ICC Profile Inspector v0.6.0 — Windows distribution, prepared 2026-11-19.
 
 The application's original source code is Copyright (c) 2026 Peter Matra and
 licensed under [MIT](LICENSE). Third-party components keep their own copyright
@@ -21,6 +21,8 @@ Existing notices inside `_internal` are also retained.
 | Pillow | 13.0.0 | MIT-CMU; distribution's complete bundled-library notices |
 | LittleCMS | 2.19.1, through Pillow | MIT; included in Pillow's license collection |
 | NumPy | 2.5.5 | BSD-3-Clause and distribution's bundled code/library licenses |
+| HiGHS | 1.12.0, through SciPy | MIT; upstream versioned license included |
+| Qhull | Bundled with SciPy | Qhull copyright and permission notice included |
 | SciPy | 1.18.1 | BSD-3-Clause and distribution's bundled code/library licenses |
 | PyOpenGL | 3.1.10 | BSD-style PyOpenGL license collection |
 | pyopengltk | 0.0.4 | MIT |
@@ -76,6 +78,7 @@ obtained from these versioned upstream sources:
 - [Tcl 8.6.13](https://github.com/tcltk/tcl/blob/core-8-6-13/license.terms): `license.terms`.
 - [OpenSSL 3.0.13](https://github.com/openssl/openssl/blob/openssl-3.0.13/LICENSE.txt): `LICENSE.txt`.
 - [Expat 2.6.2](https://github.com/libexpat/libexpat/blob/R_2_6_2/COPYING): `COPYING`.
+- [HiGHS 1.12.0](https://github.com/ERGO-Code/HiGHS/blob/v1.12.0/LICENSE.txt): `LICENSE.txt`.
 - [XZ Utils 5.2.5](https://github.com/tukaani-project/xz/blob/v5.2.5/COPYING): `COPYING`.
 - [zlib 1.3.1](https://github.com/madler/zlib/blob/v1.3.1/LICENSE): `LICENSE`.
 

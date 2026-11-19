@@ -132,7 +132,16 @@ class GamutGPU(OpenGLFrame):
         GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
         GL.glMatrixMode(GL.GL_PROJECTION)
         GL.glLoadIdentity()
-        GL.glOrtho(0, width, height, 0, -500, 500)
+        # Rotation preserves the vector norm. Size the depth range from actual
+        # data, independently of zoom, so unusual profiles cannot be clipped.
+        depth=500.0
+        for result in (owner.primary,owner.comparison):
+            if result is not None:
+                if '_depth_extent' not in result:
+                    result['_depth_extent']=float(np.linalg.norm(result['points'],axis=1).max(initial=0))*1.05+1
+                depth=max(depth,result['_depth_extent'])
+        self.depth_limit=depth
+        GL.glOrtho(0, width, height, 0, -depth, depth)
         GL.glMatrixMode(GL.GL_MODELVIEW)
         GL.glLoadIdentity()
         GL.glDisable(GL.GL_LIGHTING)  # Preserve the ICC-derived sRGB vertex colors.
@@ -145,7 +154,7 @@ class GamutGPU(OpenGLFrame):
                 continue
             key = id(result)
             live_keys.add(key)
-            if key not in self.mesh_cache:
+            if key not in self.mesh_cache or self.mesh_cache[key][3] is not result:
                 hull = result['hull']
                 triangles = np.ascontiguousarray(hull.simplices, dtype=np.uint32) if hull is not None else None
                 edges = None
@@ -179,6 +188,7 @@ class GamutGPU(OpenGLFrame):
                 GL.glDrawElements(GL.GL_POINTS,len(indices),GL.GL_UNSIGNED_INT,indices)
             if not comparison:
                 indices = result['hull'].vertices if result['hull'] is not None and view != 'Points' else owner.point_indices(result,30000)
+                indices=indices[::max(1,int(np.ceil(len(indices)/5000)))]
                 owner.hitpoints = [(points[i,0], points[i,1], result['lab'][i]) for i in indices]
             if xray:
                 GL.glDepthMask(True); GL.glEnable(GL.GL_DEPTH_TEST)

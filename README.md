@@ -1,5 +1,7 @@
 # ICC Profile Inspector
 
+[![Windows regression checks](https://github.com/pmatra/Printer-Profile-Inspector/actions/workflows/checks.yml/badge.svg)](https://github.com/pmatra/Printer-Profile-Inspector/actions/workflows/checks.yml)
+
 [Download the latest Windows release](https://github.com/pmatra/Printer-Profile-Inspector/releases/latest)
 
 Windows ICC printer-profile inspection, organization, and interactive D50 CIELAB gamut comparison. Extract the complete Windows ZIP and run **ICC Gamut Inspector.exe**. Keep `_internal` beside it. Python is not required for the packaged app.
@@ -16,7 +18,7 @@ For the first upgrade from v0.4.0 or earlier, put the old portable `settings.jso
 
 ## Profile List
 
-The initial folder is the Windows color directory, normally `C:\Windows\System32\spool\drivers\color`. Open Directory chooses another folder; the default checkbox saves it. Columns show filename, ICC version, device color space, ICC creation date, and status. Heading sorts survive refresh, folding, category moves, and restart.
+The initial folder is the Windows color directory, normally `C:\Windows\System32\spool\drivers\color`. Open Directory chooses another folder; the default checkbox saves it. Columns show filename, ICC version, device color space, ICC creation date, and status. Heading sorts survive refresh, folding, category moves, and restart. Arrows show direction; invalid/unspecified creation dates sort last in either direction. Folder scans read only ICC headers on a worker; full tag parsing occurs when opening an Inspector profile.
 
 **Search** matches list attributes and category names. Clear Search restores all entries. **Check** selects/unselects matching profiles, including matching children inside collapsed groups. Clear checks also clears hidden checks. The checked count includes checked profiles hidden by Search.
 
@@ -25,6 +27,7 @@ The initial folder is the Windows color directory, normally `C:\Windows\System32
 - Click a category name to rename inline. Enter saves, Escape cancels; F2, Rename category, and the context menu also work.
 - Arrows expand/collapse categories. Membership and expansion state are saved per directory.
 - Right-click a category and choose **Remove category… (keep profile files)**. Its profiles return to Uncategorized after confirmation. No ICC files are moved or deleted.
+- Missing saved memberships are retained and reported in the list and category headers. Filename matching is exact, so names differing only by case stay distinct. Renamed individual files require reassignment; the warning makes this visible. **Recover categories…** copies a saved old folder location’s assignments into the current folder after a folder rename/move, preserving the old mappings and all files. It does not infer identity from profile contents.
 - Right-click a categorized profile and choose Move to Uncategorized to remove only its assignment.
 
 ### Recycle Bin
@@ -47,11 +50,19 @@ Decoders cover descriptions (`text`, `desc`, `mluc`), XYZ white/black points and
 
 Drag to orbit, scroll to zoom, and use Reset view to restore the camera. CPU Points uses at most 4,000 representative samples (1,500 during orbit); GPU Points uses at most 30,000. Display decimation does not affect the complete sampled data, hull, or CSV export. Draw requests are coalesced and render data cached.
 
-ICC sampling/hull construction run on a worker thread; Tk widgets/rendering stay on the UI thread. Obsolete jobs are ignored. The default grid is 17/channel, with up to 21 available. CMYK has N⁴ samples. Export saves every sampled Lab value, intent, and filename.
+Directory scans, profile parsing, ICC sampling/hull construction, volume/intersection calculation and CSV writing run on workers; Tk widgets/rendering stay on the UI thread. **Cancel work** invalidates pending results and cooperatively stops scans/sampling/export. Transforms are processed in batches with progress updates. A native file read, transform build or hull call already running cannot be forcibly interrupted; cancellation is checked around it and its results are not published. Obsolete jobs are ignored. The default grid is 17/channel, with up to 21 available. CMYK has N⁴ samples. Export saves both the primary and active comparison: full Lab values, device values, zero-based grid coordinates/sample indices, density, device space, intent, role, profile path and profile SHA-256. Device columns are R/G/B, C/M/Y/K, or gray in channel order, encoded 0–255; unused columns are blank. CSV writes are atomic and cancellable.
+
+The viewport caveat is always visible in CPU and GPU modes. Quantities are explicitly **sampled convex-hull estimates** in Lab³: primary/comparison volume, intersection volume, and comparison/primary volume ratio. Intersection solves the convex polyhedra, not the actual non-convex printer gamuts. No concave/alpha-shape mode is implemented. Gray/degenerate sets have no 3D volume.
 
 ### Color limitations
 
-Pillow/LittleCMS transforms RGB, CMYK, and gray profiles to D50 Lab where supported. Surfaces are finite **sampled convex hulls**, which can fill concavities and miss narrow features. An 8-bit Lab intermediate is used. CMYK has no independent total-ink constraint. Display colors use sRGB and may clip; the plot is not a calibrated soft proof. Higher rendering resolution improves presentation, not colorimetric accuracy. No exact volume/overlap claim is made.
+Pillow/LittleCMS transforms RGB, CMYK, and gray profiles to D50 Lab where supported. Surfaces are finite **sampled convex hulls**, which can fill concavities and miss narrow features. An 8-bit Lab intermediate is used. CMYK has no independent total-ink constraint. Display colors use sRGB and may clip; the plot is not a calibrated soft proof. Higher rendering resolution improves presentation, not colorimetric accuracy. No exact printer-gamut volume/overlap claim is made. Convex-hull estimates can overstate real gamut and overlap.
+
+## Version and Windows distribution
+
+**⚙ → About** displays the application version. `python inspector.py --version` prints it without opening the GUI; the packaged executable also supports `--version` with an inherited output handle/parent console. Windows file properties include FileVersion/ProductVersion generated from `version.py`.
+
+The Windows executable is unsigned. Windows SmartScreen may show an unrecognized-app warning, and security products may flag a PyInstaller build. Checksums verify file integrity; they do not establish publisher identity or replace code signing. Release signing remains future distribution work. Do not bypass a warning for a download you cannot verify.
 
 ## Development
 
@@ -67,6 +78,9 @@ Tested runtime: Python 3.12 on Windows. GUI tests need a graphical desktop; GPU 
 | `profile_categories.py` | Groups, checkboxes, sorting, search, drag/drop, category removal |
 | `check_inspector.py`, `check_categories.py` | Existing application/category regressions |
 | `check_gpu.py` | Real framebuffer pixels, enclosed comparison, CPU point limits, mode/resize checks |
+| `check_adversarial.py` | Fixed color fixture, hull intersections, CSV, cancellation, header-only I/O, case/missing categories and hover regressions |
+| `version.py`, `make_version_info.py` | Shared version and generated Windows file metadata |
+| `.github/workflows/checks.yml` | Windows lint and GUI regression workflow on push/pull request |
 | `check_upgrade.py` | Recovery, cross-process mutex, search/sort, background jobs, install contract, tags |
 | `preview_list.py` | Normal single-instance startup on Profile List |
 | `build.ps1` | Windows packaging with required dynamic modules |
@@ -78,11 +92,14 @@ python -m venv .venv
 .venv\Scripts\python check_inspector.py
 .venv\Scripts\python check_categories.py
 .venv\Scripts\python check_upgrade.py
+.venv\Scripts\python check_adversarial.py
 .venv\Scripts\python check_gpu.py
 .venv\Scripts\python inspector.py
 .venv\Scripts\Activate.ps1
 .\build.ps1
 ```
+
+CI installs the locked dependencies plus `requirements-dev.txt`, runs Ruff correctness rules and all four functional check scripts. A hosted VM may lack hardware OpenGL; `check_gpu.py` is a separate release check on real hardware. A workflow file alone is not evidence of a successful remote run: inspect the linked Actions run after pushing. The fixed color fixture is generated sRGB; vendor printer profiles are not redistributed.
 
 The executable supports `--gpu-check <report.json>` for an isolated diagnostic using temporary preferences.
 

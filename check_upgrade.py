@@ -62,7 +62,7 @@ with tempfile.TemporaryDirectory() as folder:
     icc=ImageCms.ImageCmsProfile(ImageCms.createProfile('sRGB')).tobytes()
     for name in ('A.icc','B.icc','C.icc'): (profiles/name).write_bytes(icc)
     m.SETTINGS_PATH=root/'app-settings.json'
-    app=m.Inspector(); app.directory=str(profiles); app.refresh_directory()
+    app=m.Inspector(background_io=False); app.directory=str(profiles); app.refresh_directory()
     app.check_all_profiles()
     with patch.object(c.simpledialog,'askstring',return_value='Papers'): app.create_category()
     group='category:'+app.categories()[0]['id']
@@ -104,7 +104,7 @@ with tempfile.TemporaryDirectory() as folder:
     fake={'points':np.zeros((194481,3)),'hull':None}
     assert len(m.display_indices(fake,4000))<=4000 and len(fake['points'])==194481
     app.destroy()
-    reopened=m.Inspector()
+    reopened=m.Inspector(background_io=False)
     assert reopened.active_sort_reverse and reopened.active_sort_column=='filename'
     reopened.destroy()
     print('PASS: background sampling returns promptly, obsolete jobs ignored, display decimation retains source samples, sort survives restart',flush=True)

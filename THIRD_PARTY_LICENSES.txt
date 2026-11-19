@@ -1,4 +1,4 @@
-THIRD-PARTY LICENSE TEXTS — ICC Profile Inspector v0.5.2
+THIRD-PARTY LICENSE TEXTS — ICC Profile Inspector v0.6.0
 
 These notices apply to third-party software, not to the original application
 code covered by the top-level MIT LICENSE. Texts below are reproduced in full
@@ -9251,6 +9251,35 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
 ==============================================================================
+HiGHS-1.12.0-LICENSE
+Source: Upstream versioned source: HiGHS-1.12.0-LICENSE.txt
+Original file SHA-256: 10b39dba7b7731175f0705398b6db4320b64add1bd2ed9f9ec5b512a9ef1bd95
+==============================================================================
+
+MIT License
+
+Copyright (c) 2024 HiGHS
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+==============================================================================
 OpenSSL-3.0.13-LICENSE
 Source: Upstream versioned source: OpenSSL-3.0.13-LICENSE.txt
 Original file SHA-256: 7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a
@@ -10694,4 +10723,205 @@ Copyright notice:
 
   Jean-loup Gailly        Mark Adler
   jloup@gzip.org          madler@alumni.caltech.edu
+
+
+==============================================================================
+SciPy incorporated code
+Source: scipy/_lib/_uarray/LICENSE
+Original file SHA-256: e4c4acc31e8287066d7c995d26e3ef902ca1977ee187b260b11c278366503811
+==============================================================================
+
+BSD 3-Clause License
+
+Copyright (c) 2018, Quansight-Labs
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+* Redistributions of source code must retain the above copyright notice, this
+  list of conditions and the following disclaimer.
+
+* Redistributions in binary form must reproduce the above copyright notice,
+  this list of conditions and the following disclaimer in the documentation
+  and/or other materials provided with the distribution.
+
+* Neither the name of the copyright holder nor the names of its
+  contributors may be used to endorse or promote products derived from
+  this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+
+==============================================================================
+SciPy incorporated code
+Source: scipy/fft/_duccfft/LICENSE.md
+Original file SHA-256: c04661685cff9d8035fe1c4c3ab357e7f7633cafc06a73e9d90c3c5fede8a86a
+==============================================================================
+
+Copyright (C) 2010-2019 Max-Planck-Society
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met:
+
+* Redistributions of source code must retain the above copyright notice, this
+  list of conditions and the following disclaimer.
+* Redistributions in binary form must reproduce the above copyright notice, this
+  list of conditions and the following disclaimer in the documentation and/or
+  other materials provided with the distribution.
+* Neither the name of the copyright holder nor the names of its contributors may
+  be used to endorse or promote products derived from this software without
+  specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+
+==============================================================================
+SciPy incorporated code
+Source: scipy/integrate/LICENSE_DOP
+Original file SHA-256: 6cc2ed6e35b8f376ff3d8f86aeef4e0c34c2309bd6f4a0565936d577839ba023
+==============================================================================
+
+Copyright (C) 2025 SciPy developers
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+    a. Redistributions of source code must retain the above copyright notice,
+       this list of conditions and the following disclaimer.
+    b. Redistributions in binary form must reproduce the above copyright
+       notice, this list of conditions and the following disclaimer in the
+       documentation and/or other materials provided with the distribution.
+    c. Names of the SciPy Developers may not be used to endorse or promote
+       products derived from this software without specific prior written
+       permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR CONTRIBUTORS
+BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY,
+OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
+THE POSSIBILITY OF SUCH DAMAGE.
+
+
+DOP library consisting Dormand-Prince (4)5 and 8(5,3) integrators, is a
+C translation of the Fortran code written by Ernst Hairer, and Gerhard
+Wanner with the original descriptions below.
+
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+    NUMERICAL SOLUTION OF A SYSTEM OF FIRST 0RDER
+    ORDINARY DIFFERENTIAL EQUATIONS  Y'=F(X,Y).
+    THIS IS AN EXPLICIT RUNGE-KUTTA METHOD OF ORDER 8(5,3)
+    DUE TO DORMAND & PRINCE (WITH STEPSIZE CONTROL AND
+    DENSE OUTPUT)
+
+    AUTHORS: E. HAIRER AND G. WANNER
+             UNIVERSITE DE GENEVE, DEPT. DE MATHEMATIQUES
+             CH-1211 GENEVE 24, SWITZERLAND
+             E-MAIL:  Ernst.Hairer@math.unige.ch
+                      Gerhard.Wanner@math.unige.ch
+
+    THIS CODE IS DESCRIBED IN:
+        E. HAIRER, S.P. NORSETT AND G. WANNER, SOLVING ORDINARY
+        DIFFERENTIAL EQUATIONS I. NONSTIFF PROBLEMS. 2ND EDITION.
+        SPRINGER SERIES IN COMPUTATIONAL MATHEMATICS,
+        SPRINGER-VERLAG (1993)
+
+    VERSION OF APRIL 25, 1996
+    (latest correction of a small bug: August 8, 2005)
+
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+    NUMERICAL SOLUTION OF A SYSTEM OF FIRST 0RDER
+    ORDINARY DIFFERENTIAL EQUATIONS  Y'=F(X,Y).
+    THIS IS AN EXPLICIT RUNGE-KUTTA METHOD OF ORDER (4)5
+    DUE TO DORMAND & PRINCE (WITH STEPSIZE CONTROL AND
+    DENSE OUTPUT).
+
+    AUTHORS: E. HAIRER AND G. WANNER
+             UNIVERSITE DE GENEVE, DEPT. DE MATHEMATIQUES
+             CH-1211 GENEVE 24, SWITZERLAND
+             E-MAIL:  Ernst.Hairer@math.unige.ch
+                      Gerhard.Wanner@math.unige.ch
+
+    THIS CODE IS DESCRIBED IN:
+        E. HAIRER, S.P. NORSETT AND G. WANNER, SOLVING ORDINARY
+        DIFFERENTIAL EQUATIONS I. NONSTIFF PROBLEMS. 2ND EDITION.
+        SPRINGER SERIES IN COMPUTATIONAL MATHEMATICS,
+        SPRINGER-VERLAG (1993)
+
+    VERSION OF APRIL 25, 1996
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+
+
+==============================================================================
+SciPy incorporated code
+Source: scipy/spatial/qhull_src/COPYING_QHULL.txt
+Original file SHA-256: 2a6ebb495e26dd5f88cbc40c593733da6edb27b64936f70409cd5a1acafb1c32
+==============================================================================
+
+                    Qhull, Copyright (c) 1993-2020
+                    
+                            C.B. Barber
+                           Arlington, MA 
+                          
+                               and
+
+       The National Science and Technology Research Center for
+        Computation and Visualization of Geometric Structures
+                        (The Geometry Center)
+                       University of Minnesota
+
+                       email: qhull@qhull.org
+
+This software includes Qhull from C.B. Barber and The Geometry Center.  
+Files derived from Qhull 1.0 are copyrighted by the Geometry Center.  The
+remaining files are copyrighted by C.B. Barber.  Qhull is free software 
+and may be obtained via http from www.qhull.org.  It may be freely copied, 
+modified, and redistributed under the following conditions:
+
+1. All copyright notices must remain intact in all files.
+
+2. A copy of this text file must be distributed along with any copies 
+   of Qhull that you redistribute; this includes copies that you have 
+   modified, or copies of programs or other software products that 
+   include Qhull.
+
+3. If you modify Qhull, you must include a notice giving the
+   name of the person performing the modification, the date of
+   modification, and the reason for such modification.
+
+4. When distributing modified versions of Qhull, or other software 
+   products that include Qhull, you must provide notice that the original 
+   source code may be obtained as noted above.
+
+5. There is no warranty or other guarantee of fitness for Qhull, it is 
+   provided solely "as is".  Bug reports or fixes may be sent to 
+   qhull_bug@qhull.org; the authors may or may not act on them as 
+   they desire.
 

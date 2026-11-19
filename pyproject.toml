@@ -1,0 +1,3 @@
+[tool.ruff.lint]
+# Existing compact UI code is not being reformatted by this correctness check.
+select = ["E9", "F63", "F7", "F82"]

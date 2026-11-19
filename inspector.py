@@ -1,5 +1,6 @@
 """ICC Gamut Inspector — independent profile inspector and sampled gamut viewer."""
 import csv
+import hashlib
 import itertools
 import json
 import math
@@ -11,17 +12,21 @@ import tempfile
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
+from threading import Event, local
+from queue import SimpleQueue, Empty
 from pathlib import Path
 from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import numpy as np
-from scipy.spatial import ConvexHull
+from scipy.spatial import ConvexHull, cKDTree
 from PIL import Image, ImageCms
 from profile_categories import ProfileCategories
 from app_support import SettingsStore, settings_path, SingleInstance, raise_existing_window, APP_TITLE, color_directory, recycle_profile, install_profile
 from icc_tags import decode_tag, TAG_NAMES
 from ui_style import system_font, shaded_buttons
+from version import __version__
+from gamut_analysis import hull_metrics
 try:
     from gamut_gpu import GamutGPU
     GPU_IMPORT_ERROR = ''
@@ -35,6 +40,26 @@ LEGACY_SETTINGS_PATH = Path(sys.executable if getattr(sys, 'frozen', False) else
 SETTINGS_PATH = settings_path()
 SETTINGS_NOTICES = []
 THEMES = ('Windows Light', 'Windows Dark', 'Follow Windows')
+WORK_CONTEXT = local()
+
+class WorkCancelled(Exception):
+    pass
+
+def work_progress(message):
+    if getattr(WORK_CONTEXT, 'cancel', None) is not None and WORK_CONTEXT.cancel.is_set():
+        raise WorkCancelled()
+    callback = getattr(WORK_CONTEXT, 'progress', None)
+    if callback: callback(message)
+
+def run_cancellable(function, cancel, progress, *args):
+    WORK_CONTEXT.cancel, WORK_CONTEXT.progress = cancel, progress
+    try:
+        work_progress('Reading profile…')
+        value = function(*args)
+        work_progress('Complete')
+        return value
+    finally:
+        WORK_CONTEXT.cancel = WORK_CONTEXT.progress = None
 
 def read_settings():
     try:
@@ -65,13 +90,20 @@ def created_date(data):
 def directory_entries(directory):
     rows = []
     for path in sorted(Path(directory).iterdir(), key=lambda p: (not p.is_dir(), p.name.casefold())):
+        work_progress('Scanning directory: '+path.name)
         version = space = created = ''
         status = 'Folder' if path.is_dir() else 'Other file'
         if path.is_file() and path.suffix.lower() in ('.icc', '.icm'):
             try:
-                data, fields, tags = read_profile(path)
-                version = dict(fields)['Version']
-                space = dict(fields)['Device color space']
+                # The list only needs the header; opening the Inspector validates all tags.
+                with path.open('rb') as stream: data = stream.read(132)
+                actual_size = path.stat().st_size
+                if len(data)<132 or data[36:40]!=b'acsp': raise ValueError('Missing ICC header/signature')
+                declared, = struct.unpack_from('>I',data)
+                count, = struct.unpack_from('>I',data,128)
+                if declared<132 or declared>actual_size or count>(declared-132)//12: raise ValueError('Invalid profile size/tag table')
+                version = f'{data[8]}.{data[9] >> 4}.{data[9] & 15}'
+                space = data[16:20].decode('ascii','replace').strip()
                 created = created_date(data)
                 status = 'ICC profile'
             except (OSError, ValueError, struct.error) as exc:
@@ -108,6 +140,7 @@ def read_profile(path):
     return data, fields, tags
 
 def sample_gamut(path, intent=1, density=9):
+    work_progress('Reading ICC profile…')
     data, fields, tags = read_profile(path)
     mode = data[16:20].decode('ascii').strip()
     channels = {'RGB': 3, 'CMYK': 4, 'GRAY': 1}.get(mode)
@@ -116,30 +149,53 @@ def sample_gamut(path, intent=1, density=9):
     pilmode = 'L' if mode == 'GRAY' else mode
     values = np.rint(np.linspace(0, 255, density)).astype(np.uint8)
     device = np.array(list(itertools.product(values, repeat=channels)), dtype=np.uint8)
-    image = Image.frombytes(pilmode, (len(device), 1), device.tobytes())
     labprofile = ImageCms.createProfile('LAB')
+    work_progress('Building ICC transform…')
     transform = ImageCms.buildTransform(str(path), labprofile, pilmode, 'LAB', renderingIntent=intent)
-    encoded = ImageCms.applyTransform(image, transform)
-    packed = np.asarray(encoded).reshape(-1, 3)
-    lab = packed.astype(float)
-    lab[:, 0] *= 100 / 255
-    # Pillow's NumPy buffer exposes a/b as signed bytes stored in uint8,
-    # unlike getpixel(), which returns the ICC offset-binary representation.
-    lab[:, 1:] = packed[:, 1:].view(np.int8).astype(float)
     rgb_transform = ImageCms.buildTransform(labprofile, ImageCms.createProfile('sRGB'), 'LAB', 'RGB')
-    rgb = np.asarray(ImageCms.applyTransform(encoded, rgb_transform)).reshape(-1, 3)
+    labs, colors = [], []
+    for start in range(0,len(device),4096):
+        work_progress(f'Sampling ICC transform: {start:,} / {len(device):,} samples')
+        chunk=device[start:start+4096]
+        image=Image.frombytes(pilmode,(len(chunk),1),chunk.tobytes())
+        encoded=ImageCms.applyTransform(image,transform)
+        # Use Pillow's public pixel API, not its private NumPy signed-byte layout.
+        pixels = encoded.get_flattened_data() if hasattr(encoded,'get_flattened_data') else encoded.getdata()
+        lab=np.array(list(pixels),dtype=float).reshape(-1,3)
+        lab[:,0] *= 100/255
+        lab[:,1:] -= 128
+        labs.append(lab)
+        colors.append(np.asarray(ImageCms.applyTransform(encoded,rgb_transform)).reshape(-1,3))
+    lab=np.concatenate(labs); rgb=np.concatenate(colors)
     # Lab plotting coordinates: a*, b*, L* centered at 50.
     points = lab[:, [1, 2, 0]].copy()
     points[:, 2] -= 50
     hull = None
     if channels > 1:
+        work_progress('Constructing convex hull… (cancellation takes effect after this native call)')
         hull = ConvexHull(points)
+    work_progress('Sampling complete')
     return {'path': str(path), 'lab': lab, 'points': points, 'rgb': rgb,
-            'hull': hull, 'samples': len(points), 'intent': intent}
+            'hull': hull, 'samples': len(points), 'intent': intent,
+            'device':device, 'density':density, 'mode':mode, 'channels':channels,
+            'profile_sha256':hashlib.sha256(data).hexdigest()}
 
 @lru_cache(maxsize=4)
 def cached_sample(path, modified, size, intent, density):
     return sample_gamut(path, intent, density)
+
+def profile_job(path, intent, density):
+    metadata = read_profile(path)
+    work_progress('Header and tags validated; preparing sampling…')
+    stat = Path(path).stat()
+    try:
+        result = cached_sample(path,stat.st_mtime_ns,stat.st_size,intent,density)
+        work_progress('Complete')
+        return metadata, result, None
+    except WorkCancelled:
+        raise
+    except Exception as exc:
+        return metadata, None, str(exc)
 
 def display_indices(result, maximum):
     cache = result.setdefault('display_indices', {})
@@ -157,11 +213,49 @@ def display_indices(result, maximum):
         cache[maximum] = indices
     return cache[maximum]
 
+def write_samples_csv(path, results):
+    path=Path(path)
+    temporary=None
+    count=0
+    try:
+        with tempfile.NamedTemporaryFile(mode='w',newline='',encoding='utf-8',dir=path.parent,prefix=path.name+'.',suffix='.tmp',delete=False) as stream:
+            temporary=stream.name
+            writer=csv.writer(stream)
+            writer.writerow(['role','profile','profile_sha256','app_version','intent','device_space','grid_density','sample_index',
+                             'grid_1','grid_2','grid_3','grid_4','device_1','device_2','device_3','device_4','L_D50','a_D50','b_D50'])
+            for role,result in results:
+                if result is None: continue
+                channels=result['channels']; density=result['density']
+                for i,(device,lab) in enumerate(zip(result['device'],result['lab'])):
+                    if i%4096==0: work_progress('Writing sample CSV…')
+                    grid=list(np.unravel_index(i,(density,)*channels))+['']*(4-channels)
+                    values=list(map(int,device))+['']*(4-channels)
+                    writer.writerow([role,result['path'],result['profile_sha256'],__version__,INTENTS[result['intent']],result['mode'],density,i,*grid,*values,*lab])
+                    count+=1
+            stream.flush(); os.fsync(stream.fileno())
+        work_progress('Finishing sample CSV…')
+        os.replace(temporary,path); temporary=None
+        return count
+    finally:
+        if temporary is not None:
+            try: os.unlink(temporary)
+            except FileNotFoundError: pass
+
 class Inspector(ProfileCategories, tk.Tk):
-    def __init__(self):
+    def __init__(self, background_io=True):
         super().__init__()
         self.title(APP_TITLE)
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='icc-sampling')
+        self.io_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix='icc-files')
+        self.background_io = background_io
+        self.directory_generation = 0
+        self.directory_jobs = []
+        self.job_tokens = {}
+        self.progress_queue = SimpleQueue()
+        self.metric_future = None
+        self.export_future = None
+        self.metric_identity = None
+        self.library_rows = []
         self.jobs = []
         self.job_generation = {'primary':0, 'comparison':0}
         self.closing = False
@@ -226,6 +320,8 @@ class Inspector(ProfileCategories, tk.Tk):
         self.gpu_label.pack(side='left')
         self.legend = ttk.Label(self.inspector_tab, padding=(20,4), wraplength=1100)
         self.legend.pack(fill='x')
+        self.metrics_label = ttk.Label(self.inspector_tab, padding=(20,0),wraplength=1100)
+        self.metrics_label.pack(fill='x')
         split = ttk.Panedwindow(self.inspector_tab, orient='horizontal'); split.pack(fill='both', expand=True, padx=12)
         tabs = ttk.Notebook(split); split.add(tabs, weight=1)
         info = ttk.Frame(tabs); tabs.add(info, text='Profile header')
@@ -255,6 +351,8 @@ class Inspector(ProfileCategories, tk.Tk):
         self.render_host = right
         self.canvas = tk.Canvas(right, bg='#0c121c', highlightthickness=0)
         self.canvas.pack(fill='both', expand=True)
+        self.plot_notice = tk.Label(right,text='Sampled convex-hull approximation • not an exact gamut boundary',anchor='w')
+        self.plot_notice.place(x=12,rely=1,y=-10,anchor='sw')
         self.canvas.bind('<Configure>', lambda e: self.draw())
         self.canvas.bind('<ButtonPress-1>', lambda e: setattr(self, 'drag', (e.x, e.y)))
         self.canvas.bind('<B1-Motion>', self.rotate)
@@ -270,6 +368,9 @@ class Inspector(ProfileCategories, tk.Tk):
             self.theme_menu.add_radiobutton(label=name, variable=self.theme_choice, value=name,
                                            command=self.change_theme)
         self.settings_menu.add_cascade(label='Theme', menu=self.theme_menu)
+        self.settings_menu.add_command(label=f'About ICC Profile Inspector {__version__}…',command=self.show_about)
+        self.cancel_button = ttk.Button(render_controls,text='Cancel work',command=self.cancel_work,state='disabled')
+        self.cancel_button.pack(side='right')
         self.gear_button = ttk.Button(self, text='⚙', width=3, command=self.show_settings,
                                       takefocus=True)
         self.gear_button.place(relx=1, x=-14, y=10, anchor='ne')
@@ -287,8 +388,11 @@ class Inspector(ProfileCategories, tk.Tk):
 
     def destroy(self):
         self.closing = True
+        for token in self.job_tokens.values(): token.set()
+        for future,token,*_ in self.directory_jobs: token.set(); future.cancel()
         for future, *_ in self.jobs: future.cancel()
         self.executor.shutdown(wait=False, cancel_futures=True)
+        self.io_executor.shutdown(wait=False,cancel_futures=True)
         super().destroy()
 
     def schedule_draw(self):
@@ -305,6 +409,19 @@ class Inspector(ProfileCategories, tk.Tk):
     def show_settings(self):
         self.settings_menu.tk_popup(self.gear_button.winfo_rootx(),
                                     self.gear_button.winfo_rooty() + self.gear_button.winfo_height())
+
+    def show_about(self):
+        messagebox.showinfo('About ICC Profile Inspector',f'ICC Profile Inspector {__version__}\n\nCopyright © 2026 Peter Matra\nMIT license; dependencies retain their own licenses.\n\nGamut surfaces and volumes are sampled convex-hull approximations.',parent=self)
+
+    def cancel_work(self):
+        for token in self.job_tokens.values(): token.set()
+        for slot in self.job_generation: self.job_generation[slot]+=1
+        for future,*_ in self.jobs: future.cancel()
+        for future,token,*_ in self.directory_jobs: token.set(); future.cancel()
+        self.directory_generation+=1
+        self.status.config(text='Cancelled. A native ICC/hull call already running may finish before the worker stops.')
+        self.directory_status.config(text='Directory scan cancelled; the previous list is retained.')
+        self.cancel_button.config(state='disabled')
 
     def select_renderer(self, event=None):
         if self.render_mode.get() == 'High GPU':
@@ -396,6 +513,7 @@ class Inspector(ProfileCategories, tk.Tk):
                            selectbackground=p['selected'], selectforeground=p['selection_text'])
         self.canvas.configure(bg=p['plot'])
         self.tag_plot.configure(bg=p['field'])
+        self.plot_notice.configure(bg=p['plot'],fg=p['muted'],font=(self.ui_family,self.ui_size))
         self.render_tag_plot()
         self.profile_list.tag_configure('category_header', background=('#343b43' if self.active_dark else '#e7edf3'),
                                         foreground=p['text'], font=(self.ui_family,self.ui_size,'bold'))
@@ -453,10 +571,13 @@ class Inspector(ProfileCategories, tk.Tk):
         ttk.Button(category_bar, text='Create category from checked…', command=self.create_category).pack(side='left')
         ttk.Button(category_bar, text='Rename category', command=self.rename_selected_category).pack(side='left', padx=8)
         ttk.Button(category_bar, text='Clear checks', command=self.clear_profile_checks).pack(side='left')
+        ttk.Button(category_bar,text='Recover categories…',command=self.recover_categories).pack(side='left',padx=8)
         self.checked_label = ttk.Label(category_bar, text='0 checked', padding=(12, 0))
         self.checked_label.pack(side='left')
         self.directory_label = ttk.Label(self.list_tab, padding=(12, 4), wraplength=1000)
         self.directory_label.pack(fill='x')
+        self.category_warning=ttk.Label(self.list_tab,padding=(12,0),wraplength=1000)
+        self.category_warning.pack(fill='x')
         frame = ttk.Frame(self.list_tab, padding=12)
         frame.pack(fill='both', expand=True)
         columns = ('filename', 'version', 'space', 'created', 'status')
@@ -559,16 +680,33 @@ class Inspector(ProfileCategories, tk.Tk):
             self.make_default.set(Path(self.directory) == Path(self.default_directory))
             messagebox.showerror('Default directory could not be saved', str(exc))
 
-    def refresh_directory(self):
+    def refresh_directory(self, background=None):
         self.directory_label.config(text=self.directory)
+        self.directory_generation+=1
+        generation=self.directory_generation
+        for future,token,*_ in self.directory_jobs: token.set(); future.cancel()
+        directory=self.directory
+        background=self.background_io if background is None else background
+        if background:
+            if getattr(self,'displayed_directory',None)!=directory: self.render_library([])
+            self.directory_status.config(text='Scanning directory in the background…')
+            token=Event()
+            future=self.io_executor.submit(run_cancellable,directory_entries,token,None,directory)
+            self.directory_jobs.append((future,token,generation,directory))
+            if hasattr(self,'cancel_button'): self.cancel_button.config(state='normal')
+            return
         try:
             rows = directory_entries(self.directory)
-            self.render_library(rows)
-            count = sum(values[-1] == 'ICC profile' for _, values in rows)
-            self.directory_status.config(text=f'{len(rows)} items • {count} ICC profiles • Check profiles to create a category, or drag profiles onto a category. Click a category name to rename; use its arrow to expand/collapse.')
+            self.publish_directory(rows,directory)
         except OSError as exc:
             self.render_library([])
             self.directory_status.config(text=f'Cannot read directory: {exc} • Use Open Directory to choose another folder.')
+
+    def publish_directory(self,rows,directory):
+        self.displayed_directory=directory
+        self.render_library(rows)
+        count=sum(values[-1]=='ICC profile' for _,values in rows)
+        self.directory_status.config(text=f'{len(rows)} items • {count} ICC profiles • {self.category_notice}')
 
     def sort_directory(self, column):
         self.active_sort_reverse = (not self.active_sort_reverse) if self.sort_clicked and column==self.active_sort_column else False
@@ -611,7 +749,7 @@ class Inspector(ProfileCategories, tk.Tk):
             self.refresh_directory()
             return
         if not messagebox.askyesno('Delete profile?',
-                                  f'Move this specific profile to the Recycle Bin?\n\n{path.name}\n\n{path}\n\nYou can restore it from the Windows Recycle Bin.',
+                                  f'Move this specific profile to the Recycle Bin?\n\n{path.name}\n\n{path}\n\nYou can restore it from the Windows Recycle Bin.'+ ('\n\nWARNING: This is a system color profile. Removing it may affect printing or applications that use it.' if path.resolve().parent==DEFAULT_DIRECTORY.resolve() else ''),
                                   icon='warning', default=messagebox.NO, parent=self):
             return
         try:
@@ -625,7 +763,7 @@ class Inspector(ProfileCategories, tk.Tk):
                 self.job_generation[slot]+=1; future.cancel()
         categories = self.categories()
         for category in categories:
-            category['files'] = [f for f in category['files'] if f.casefold() != path.name.casefold()]
+            category['files'] = [f for f in category['files'] if f != path.name]
         if categories:
             self.commit_categories(categories)
         if self.path and Path(self.path) == path:
@@ -674,55 +812,101 @@ class Inspector(ProfileCategories, tk.Tk):
 
     def load(self, path, compare=False, background=True):
         try:
-            path = str(Path(path).resolve())
+            path = os.path.abspath(path)
             slot = 'comparison' if compare else 'primary'
             self.job_generation[slot] += 1
             generation = self.job_generation[slot]
+            if slot in self.job_tokens: self.job_tokens[slot].set()
             for future, old_slot, *_ in self.jobs:
                 if old_slot == slot: future.cancel()
             if not compare:
-                data, fields, tags = read_profile(path)
-                self.path, self.data, self.tagdata = path, data, tags
+                self.path = path
                 self.primary = None
-                self.settext(self.header, '\n\n'.join(f'{k}\n{v}' for k,v in fields))
+                self.data=b''; self.tagdata=[]
+                self.settext(self.header, 'Reading profile and tags in the background…')
                 for item in self.tags.get_children(): self.tags.delete(item)
-                for i,(sig,typ,off,size) in enumerate(tags): self.tags.insert('', 'end', iid=str(i), text=sig, values=(TAG_NAMES.get(sig,'ICC tag'),typ,f'{size:,}'))
                 self.settext(self.raw, 'Select a tag to inspect its raw bytes.')
                 self.settext(self.tag_details,'Select an ICC tag to see decoded data and curves.')
                 self.tag_curves=[]; self.render_tag_plot()
                 self.subtitle.config(text=Path(path).name)
             else:
-                read_profile(path)
                 self.comparison = None
-            self.status.config(text='Sampling ICC transform…'); self.update_idletasks()
-            stat = Path(path).stat()
-            args=(path,stat.st_mtime_ns,stat.st_size,INTENTS.index(self.intent.get()),int(self.density.get()))
+            self.status.config(text='Reading / sampling ICC profile…')
+            args=(path,INTENTS.index(self.intent.get()),int(self.density.get()))
             if background:
-                self.jobs.append((self.executor.submit(cached_sample,*args),slot,generation,path))
+                token=Event(); self.job_tokens[slot]=token
+                progress=lambda message:self.progress_queue.put((slot,generation,message))
+                self.jobs.append((self.executor.submit(run_cancellable,profile_job,token,progress,*args),slot,generation,path))
+                self.cancel_button.config(state='normal')
             else:
-                result = cached_sample(*args)
-                setattr(self,slot,result); self.report()
+                self.publish_profile(slot,profile_job(*args)); self.report()
         except Exception as exc:
             messagebox.showerror('Profile could not be plotted', str(exc))
             self.status.config(text=str(exc))
         self.draw()
 
+    def publish_profile(self,slot,loaded):
+        metadata,result,error=loaded
+        if slot=='primary':
+            data,fields,tags=metadata
+            self.data,self.tagdata=data,tags
+            self.settext(self.header,'\n\n'.join(f'{k}\n{v}' for k,v in fields))
+            for item in self.tags.get_children(): self.tags.delete(item)
+            for i,(sig,typ,off,size) in enumerate(tags): self.tags.insert('', 'end', iid=str(i), text=sig, values=(TAG_NAMES.get(sig,'ICC tag'),typ,f'{size:,}'))
+        setattr(self,slot,result)
+        if error: raise ValueError(error)
+
     def poll_jobs(self):
         if self.closing: return
         if SETTINGS_NOTICES: self.report_settings_recovery()
+        directories=[]
+        for future,token,generation,directory in self.directory_jobs:
+            if not future.done(): directories.append((future,token,generation,directory)); continue
+            if future.cancelled() or generation!=self.directory_generation: continue
+            try: self.publish_directory(future.result(),directory)
+            except WorkCancelled: pass
+            except Exception as exc: self.directory_status.config(text=f'Cannot read directory: {exc}')
+        self.directory_jobs=directories
+        while True:
+            try: slot,generation,message=self.progress_queue.get_nowait()
+            except Empty: break
+            if generation==self.job_generation[slot]: self.status.config(text=message)
         remaining=[]
         for future,slot,generation,path in self.jobs:
             if not future.done(): remaining.append((future,slot,generation,path)); continue
             if future.cancelled() or generation!=self.job_generation[slot]: continue
             try:
-                setattr(self,slot,future.result()); self.report(); self.draw()
+                self.publish_profile(slot,future.result()); self.report(); self.draw()
+            except WorkCancelled: pass
             except Exception as exc:
                 self.status.config(text=f'Could not sample {Path(path).name}: {exc}')
                 messagebox.showerror('Profile could not be plotted',f'{path}\n\n{exc}',parent=self)
         self.jobs=remaining
+        if self.export_future is not None and self.export_future.done():
+            future=self.export_future; self.export_future=None
+            try: self.status.config(text=f'Exported {future.result():,} device/Lab samples (primary and active comparison).')
+            except WorkCancelled: self.status.config(text='Export cancelled; the previous destination file was preserved.')
+            except Exception as exc: messagebox.showerror('Export failed',str(exc),parent=self)
+        self.cancel_button.config(state='normal' if self.jobs or self.directory_jobs or self.export_future else 'disabled')
+        if self.metric_future is not None and self.metric_future.done():
+            future=self.metric_future; self.metric_future=None
+            try:
+                metrics=future.result()
+                if self.metric_identity==(id(self.primary),id(self.comparison)):
+                    values=[f'Primary hull: {metrics["primary_volume"]:,.0f} Lab³'] if metrics['primary_volume'] is not None else ['No 3D hull volume (gray/degenerate samples)']
+                    if metrics['comparison_volume'] is not None: values.append(f'Comparison hull: {metrics["comparison_volume"]:,.0f} Lab³')
+                    if metrics['overlap_volume'] is not None: values.append(f'Hull intersection: {metrics["overlap_volume"]:,.0f} Lab³ • comparison/primary: {metrics["volume_ratio"]:.3f}')
+                    self.metrics_label.config(text=' | '.join(values)+' — convex-hull estimates only')
+            except Exception as exc: self.metrics_label.config(text=f'Convex-hull metrics unavailable: {exc}')
         self.after(30,self.poll_jobs)
 
     def report(self):
+        identity=(id(self.primary),id(self.comparison))
+        if identity!=self.metric_identity:
+            self.metric_identity=identity
+            if self.metric_future: self.metric_future.cancel()
+            self.metric_future=self.executor.submit(hull_metrics,self.primary,self.comparison)
+            self.metrics_label.config(text='Calculating sampled convex-hull estimates…')
         if self.primary:
             p = self.primary
             extra = f" • Comparison: {Path(self.comparison['path']).name} (cyan wireframe)" if self.comparison else ''
@@ -736,6 +920,7 @@ class Inspector(ProfileCategories, tk.Tk):
         if other: self.load(other, True)
 
     def clear(self):
+        if 'comparison' in self.job_tokens: self.job_tokens['comparison'].set()
         self.job_generation['comparison'] += 1
         self.comparison = None; self.report(); self.draw()
     def reset(self): self.yaw, self.pitch, self.zoom = .65, -.35, 1.8; self.draw()
@@ -765,6 +950,7 @@ class Inspector(ProfileCategories, tk.Tk):
         comparison_mode = ('CPU overlay' if self.render_mode.get()=='Basic CPU' else ('X-ray' if self.xray.get() else 'depth-tested'))
         comparison=(f"Comparison: {Path(self.comparison['path']).name} • cyan wireframe • "+comparison_mode) if self.comparison else 'No comparison'
         self.legend.config(text=f'Primary: {primary}  |  {comparison}')
+        self.plot_notice.lift()
         if self.render_mode.get() == 'High GPU' and self.gpu is not None:
             self.gpu.request_draw()
             return
@@ -800,8 +986,13 @@ class Inspector(ProfileCategories, tk.Tk):
 
     def hover(self,e):
         if not self.hitpoints:return
-        best=min(self.hitpoints,key=lambda p:(p[0]-e.x)**2+(p[1]-e.y)**2)
-        if (best[0]-e.x)**2+(best[1]-e.y)**2<100:
+        if getattr(self,'hover_source',None) is not self.hitpoints:
+            self.hover_source=self.hitpoints
+            self.hover_points=self.hitpoints[::max(1,math.ceil(len(self.hitpoints)/5000))]
+            self.hover_tree=cKDTree([(p[0],p[1]) for p in self.hover_points])
+        distance,index=self.hover_tree.query((e.x,e.y),distance_upper_bound=10)
+        if distance<10:
+            best=self.hover_points[index]
             l,a,b=best[2]; self.status.config(text=f'Sampled point: L* {l:.2f}   a* {a:.2f}   b* {b:.2f}  •  Display colors use sRGB')
 
     def tag_selected(self,e):
@@ -843,12 +1034,12 @@ class Inspector(ProfileCategories, tk.Tk):
         if not self.primary: return messagebox.showinfo('Export','Open a supported profile first.')
         path=filedialog.asksaveasfilename(defaultextension='.csv',filetypes=[('CSV','*.csv')])
         if path:
-            try:
-                with open(path,'w',newline='',encoding='utf-8') as f:
-                    writer=csv.writer(f); writer.writerow(['L_D50','a_D50','b_D50','intent','profile'])
-                    for row in self.primary['lab']: writer.writerow([*row,INTENTS[self.primary['intent']],self.primary['path']])
-                self.status.config(text=f'Exported {len(self.primary["lab"]):,} Lab samples to {path}')
-            except OSError as exc: messagebox.showerror('Export failed',str(exc))
+            if self.export_future and not self.export_future.done():
+                return messagebox.showinfo('Export in progress','Wait for the current export or cancel it first.',parent=self)
+            token=Event(); self.job_tokens['export']=token
+            self.export_future=self.io_executor.submit(run_cancellable,write_samples_csv,token,None,path,[('primary',self.primary),('comparison',self.comparison)])
+            self.status.config(text='Exporting full device/Lab samples in the background…')
+            self.cancel_button.config(state='normal')
 
 def main(initial_list=False):
     guard=SingleInstance()
@@ -863,6 +1054,22 @@ def main(initial_list=False):
         guard.close()
 
 if __name__=='__main__':
+    if sys.argv[1:]==['--version']:
+        if getattr(sys,'frozen',False) and sys.stdout is None:
+            # Windowed bootloaders unset sys.stdout, even when the parent pipes
+            # stdout. Write to the inherited Windows handle without opening UI.
+            import ctypes
+            kernel=ctypes.WinDLL('kernel32',use_last_error=True)
+            kernel.GetStdHandle.argtypes=[ctypes.c_uint32];kernel.GetStdHandle.restype=ctypes.c_void_p
+            kernel.WriteFile.argtypes=[ctypes.c_void_p,ctypes.c_void_p,ctypes.c_uint32,ctypes.POINTER(ctypes.c_uint32),ctypes.c_void_p]
+            handle=kernel.GetStdHandle(-11 & 0xffffffff)
+            if not handle or handle==ctypes.c_void_p(-1).value:
+                kernel.AttachConsole(-1 & 0xffffffff)
+                handle=kernel.GetStdHandle(-11 & 0xffffffff)
+            line=f'ICC Profile Inspector {__version__}\r\n'.encode('utf-8');written=ctypes.c_uint32()
+            if handle and handle!=ctypes.c_void_p(-1).value: kernel.WriteFile(handle,line,len(line),ctypes.byref(written),None)
+        else: print(f'ICC Profile Inspector {__version__}')
+        sys.exit(0)
     if len(sys.argv)==5 and sys.argv[1]=='--install-profile' and sys.argv[3]=='--install-result':
         try:
             read_profile(sys.argv[2]); ImageCms.getOpenProfile(sys.argv[2])

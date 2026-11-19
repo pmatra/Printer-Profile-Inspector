@@ -77,7 +77,7 @@ class ProfileCategories:
             self.category_rows[item] = category['id']
             tree.insert('', 'end', iid=item, values=(category['name'], '', '', '', 'Category'), open=category['open'], tags=('category_header',))
             for filename in category['files']:
-                membership.setdefault(filename.casefold(), item)
+                membership.setdefault(filename, item)
         tree.insert('', 'end', iid='uncategorized', values=('Uncategorized', '', '', '', 'Default group'),
                     open=getattr(self, 'uncategorized_open', True), tags=('category_header',))
         present = set()
@@ -86,8 +86,8 @@ class ProfileCategories:
         category_names = {item:tree.set(item,'filename') for item in tree.get_children()}
         for index, (path, values) in enumerate(self.library_rows):
             item = 'profile:' + str(index)
-            is_profile = path.suffix.lower() in ('.icc', '.icm') and path.is_file()
-            parent = membership.get(path.name.casefold(), 'uncategorized') if is_profile else 'uncategorized'
+            is_profile = path.suffix.lower() in ('.icc', '.icm') and values[-1] != 'Folder'
+            parent = membership.get(path.name, 'uncategorized') if is_profile else 'uncategorized'
             self.all_library_paths[item] = path
             present.add(str(path))
             if query and query not in (' '.join(str(v) for v in values)+' '+category_names.get(parent,'')).casefold():
@@ -96,9 +96,17 @@ class ProfileCategories:
             mark = ('☑' if str(path) in self.checked_profiles else '☐') if is_profile else ''
             tree.insert(parent, 'end', iid=item, text=mark, values=values)
         self.checked_profiles.intersection_update(present)
+        existing={path.name for path,_ in self.library_rows}
+        missing={name for category in categories for name in category['files'] if name not in existing}
+        self.category_notice=(f'{len(missing)} saved profile membership(s) are missing; files may have been renamed/moved. Recover categories can copy assignments from an old folder location.' if missing else 'Check profiles to create categories; drag profiles to move them. Recover categories can restore assignments after a folder move.')
+        if hasattr(self,'category_warning'): self.category_warning.config(text=self.category_notice if missing else '')
         for item in [*self.category_rows, 'uncategorized']:
             count = len(tree.get_children(item))
             tree.set(item, 'status', f'{count} items' if item == 'uncategorized' else f'Category • {count} profiles')
+            if item in self.category_rows:
+                category=next(c for c in categories if c['id']==self.category_rows[item])
+                absent=sum(name not in existing for name in category['files'])
+                if absent: tree.set(item,'status',f'Category • {count} shown • {absent} missing')
             if query and count==0 and query not in category_names.get(item,'').casefold(): tree.detach(item)
             elif query and count: tree.item(item,open=True)
         self.apply_library_sort()
@@ -113,10 +121,27 @@ class ProfileCategories:
                 try: return tuple(int(v) for v in value.split('.'))
                 except ValueError: return ()
             return value.casefold()
+        titles={'filename':'Filename','version':'Version','space':'Device color space','created':'Created','status':'Status'}
+        for name,title in titles.items(): tree.heading(name,text=title+(' ▼' if self.active_sort_reverse else ' ▲') if name==column else title)
         for parent in [*self.category_rows,'uncategorized']:
             if tree.exists(parent):
-                for index,item in enumerate(sorted(tree.get_children(parent),key=key,reverse=self.active_sort_reverse)):
+                children=list(tree.get_children(parent))
+                invalid=[i for i in children if column=='created' and len(tree.set(i,column))!=19]
+                valid=[i for i in children if i not in invalid]
+                for index,item in enumerate(sorted(valid,key=key,reverse=self.active_sort_reverse)+invalid):
                     tree.move(item,parent,index)
+
+    def recover_categories(self):
+        locations=[key for key in self.category_store if key!=directory_key(self.directory)]
+        if not locations:
+            messagebox.showinfo('Recover categories','No other saved folder locations are available.',parent=self); return
+        old=simpledialog.askstring('Recover categories','If a folder moved/was renamed, copy its saved categories here. Files are matched by exact filename; no files are moved.\n\nSaved folder locations:\n'+'\n'.join(locations)+'\n\nEnter the old folder location:',parent=self)
+        if not old: return
+        key=directory_key(old)
+        if key not in self.category_store:
+            messagebox.showerror('Unknown saved folder','Choose one of the saved locations listed.',parent=self); return
+        if self.categories() and not messagebox.askyesno('Replace current category assignments?', 'Replace this folder’s category assignments with the selected saved location? ICC files and the old location’s saved categories are preserved.',default=messagebox.NO,parent=self): return
+        if self.commit_categories(deepcopy(self.category_store[key])): self.refresh_directory()
 
     def remove_category(self,item):
         key=self.category_rows.get(item)
@@ -177,9 +202,9 @@ class ProfileCategories:
         if name is None:
             return
         categories = self.categories()
-        selected = {Path(p).name.casefold() for p in self.checked_profiles}
+        selected = {Path(p).name for p in self.checked_profiles}
         for category in categories:
-            category['files'] = [f for f in category['files'] if f.casefold() not in selected]
+            category['files'] = [f for f in category['files'] if f not in selected]
         category = {'id': uuid.uuid4().hex, 'name': name,
                     'files': sorted(Path(p).name for p in self.checked_profiles), 'open': True}
         categories.append(category)
@@ -196,9 +221,9 @@ class ProfileCategories:
         filenames = {available[str(p)].name for p in paths if str(p) in available}
         if not filenames:
             return False
-        selected = {name.casefold() for name in filenames}
+        selected = {name for name in filenames}
         for category in categories:
-            category['files'] = [f for f in category['files'] if f.casefold() not in selected]
+            category['files'] = [f for f in category['files'] if f not in selected]
             if category['id'] == category_id:
                 category['files'].extend(sorted(filenames))
                 category['open'] = True

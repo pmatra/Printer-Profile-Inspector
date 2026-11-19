@@ -21,7 +21,7 @@ with tempfile.TemporaryDirectory() as directory:
     for name in ('one.icc', 'two.icc', 'three.icm'):
         (profiles / name).write_bytes(data)
     (profiles / 'note.txt').write_text('not a profile')
-    app = m.Inspector()
+    app = m.Inspector(background_io=False)
     app.directory = str(profiles)
     app.refresh_directory()
     app.main_tabs.select(app.list_tab)
@@ -108,7 +108,7 @@ with tempfile.TemporaryDirectory() as directory:
     app.change_theme()
     assert m.read_settings()['profile_categories']
     app.destroy()
-    reopened = m.Inspector()
+    reopened = m.Inspector(background_io=False)
     assert reopened.categories()[0]['name'] == 'Fine art papers'
     assert len(reopened.categories()[0]['files']) == 2
     assert not reopened.profile_list.item(item, 'open')

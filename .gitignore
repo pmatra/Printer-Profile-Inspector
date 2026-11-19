@@ -10,6 +10,7 @@ dist/
 *.zip
 settings.json
 .pytest_cache/
+.ruff_cache/
 
 settings.json.bak
 settings.corrupt-*.json
