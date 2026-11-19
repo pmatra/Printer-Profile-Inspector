@@ -152,8 +152,11 @@ class GamutGPU(OpenGLFrame):
                 if triangles is not None:
                     edges = np.unique(np.sort(np.concatenate([triangles[:, [0,1]], triangles[:, [1,2]], triangles[:, [2,0]]]), axis=1), axis=0)
                     edges = np.ascontiguousarray(edges, dtype=np.uint32)
-                self.mesh_cache[key] = (triangles, edges, np.ascontiguousarray(result['rgb'] / 255, dtype=np.float32))
-            triangles, edges, colors = self.mesh_cache[key]
+                self.mesh_cache[key] = (triangles, edges, np.ascontiguousarray(result['rgb'] / 255, dtype=np.float32),result)
+            triangles, edges, colors, source = self.mesh_cache[key]
+            xray = comparison and owner.xray.get()
+            if xray:
+                GL.glDisable(GL.GL_DEPTH_TEST); GL.glDepthMask(False)
             points = np.ascontiguousarray(owner.project(result['points']), dtype=np.float32)
             GL.glVertexPointer(3, GL.GL_FLOAT, 0, points)
             GL.glColorPointer(3, GL.GL_FLOAT, 0, colors)
@@ -172,10 +175,13 @@ class GamutGPU(OpenGLFrame):
                 GL.glEnableClientState(GL.GL_COLOR_ARRAY)
             else:
                 GL.glPointSize(3 * self.target_size[0] / width)
-                GL.glDrawArrays(GL.GL_POINTS, 0, len(points))
+                indices=np.ascontiguousarray(owner.point_indices(result,30000),dtype=np.uint32)
+                GL.glDrawElements(GL.GL_POINTS,len(indices),GL.GL_UNSIGNED_INT,indices)
             if not comparison:
-                indices = result['hull'].vertices if result['hull'] is not None and view != 'Points' else range(len(points))
+                indices = result['hull'].vertices if result['hull'] is not None and view != 'Points' else owner.point_indices(result,30000)
                 owner.hitpoints = [(points[i,0], points[i,1], result['lab'][i]) for i in indices]
+            if xray:
+                GL.glDepthMask(True); GL.glEnable(GL.GL_DEPTH_TEST)
         self.mesh_cache = {k:v for k,v in self.mesh_cache.items() if k in live_keys}
         GL.glDisableClientState(GL.GL_COLOR_ARRAY)
         GL.glDisableClientState(GL.GL_VERTEX_ARRAY)

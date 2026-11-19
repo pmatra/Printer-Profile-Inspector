@@ -66,8 +66,8 @@ class ProfileCategories:
         if tree.exists('uncategorized'):
             self.uncategorized_open = bool(tree.item('uncategorized', 'open'))
         self.cancel_category_editor()
-        for item in tree.get_children():
-            tree.delete(item)
+        for item in set(tree.get_children()) | set(self.category_rows) | {'uncategorized'}:
+            if tree.exists(item): tree.delete(item)
         self.list_paths = {}
         self.category_rows = {}
         categories = self.categories()
@@ -75,25 +75,58 @@ class ProfileCategories:
         for category in categories:
             item = 'category:' + category['id']
             self.category_rows[item] = category['id']
-            tree.insert('', 'end', iid=item, values=(category['name'], '', '', '', 'Category'), open=category['open'])
+            tree.insert('', 'end', iid=item, values=(category['name'], '', '', '', 'Category'), open=category['open'], tags=('category_header',))
             for filename in category['files']:
                 membership.setdefault(filename.casefold(), item)
         tree.insert('', 'end', iid='uncategorized', values=('Uncategorized', '', '', '', 'Default group'),
-                    open=getattr(self, 'uncategorized_open', True))
+                    open=getattr(self, 'uncategorized_open', True), tags=('category_header',))
         present = set()
+        self.all_library_paths = {}
+        query = self.search_text.get().strip().casefold()
+        category_names = {item:tree.set(item,'filename') for item in tree.get_children()}
         for index, (path, values) in enumerate(self.library_rows):
             item = 'profile:' + str(index)
             is_profile = path.suffix.lower() in ('.icc', '.icm') and path.is_file()
             parent = membership.get(path.name.casefold(), 'uncategorized') if is_profile else 'uncategorized'
-            self.list_paths[item] = path
+            self.all_library_paths[item] = path
             present.add(str(path))
+            if query and query not in (' '.join(str(v) for v in values)+' '+category_names.get(parent,'')).casefold():
+                continue
+            self.list_paths[item] = path
             mark = ('☑' if str(path) in self.checked_profiles else '☐') if is_profile else ''
             tree.insert(parent, 'end', iid=item, text=mark, values=values)
         self.checked_profiles.intersection_update(present)
         for item in [*self.category_rows, 'uncategorized']:
             count = len(tree.get_children(item))
             tree.set(item, 'status', f'{count} items' if item == 'uncategorized' else f'Category • {count} profiles')
+            if query and count==0 and query not in category_names.get(item,'').casefold(): tree.detach(item)
+            elif query and count: tree.item(item,open=True)
+        self.apply_library_sort()
         self.update_checked_label()
+
+    def apply_library_sort(self):
+        tree=self.profile_list
+        column=self.active_sort_column
+        def key(item):
+            value=tree.set(item,column)
+            if column=='version':
+                try: return tuple(int(v) for v in value.split('.'))
+                except ValueError: return ()
+            return value.casefold()
+        for parent in [*self.category_rows,'uncategorized']:
+            if tree.exists(parent):
+                for index,item in enumerate(sorted(tree.get_children(parent),key=key,reverse=self.active_sort_reverse)):
+                    tree.move(item,parent,index)
+
+    def remove_category(self,item):
+        key=self.category_rows.get(item)
+        category=next((v for v in self.categories() if v['id']==key),None)
+        if not category: return
+        if not messagebox.askyesno('Remove category (keep files)?',
+            f'Remove the category “{category["name"]}”?\n\nIts profiles will return to Uncategorized. No profile files will be deleted.',
+            default=messagebox.NO,parent=self): return
+        if self.commit_categories([v for v in self.categories() if v['id']!=key]):
+            self.refresh_directory()
 
     def update_checked_label(self):
         self.checked_label.config(text=f'{len(self.checked_profiles)} checked')
@@ -159,7 +192,7 @@ class ProfileCategories:
         categories = self.categories()
         if category_id is not None and not any(c['id'] == category_id for c in categories):
             return False
-        available = {str(p): p for p in self.list_paths.values() if p.is_file() and p.suffix.lower() in ('.icc', '.icm')}
+        available = {str(p): p for p in self.all_library_paths.values() if p.is_file() and p.suffix.lower() in ('.icc', '.icm')}
         filenames = {available[str(p)].name for p in paths if str(p) in available}
         if not filenames:
             return False
@@ -226,7 +259,7 @@ class ProfileCategories:
         tree.configure(cursor='fleur')
         self.drop_target = self.drop_destination(event)
         for group in [*self.category_rows, 'uncategorized']:
-            tree.item(group, tags=('drop_target',) if group == self.drop_target else ())
+            tree.item(group, tags=('drop_target','category_header') if group == self.drop_target else ('category_header',))
         if event.y < 35:
             tree.yview_scroll(-1, 'units')
         elif event.y > tree.winfo_height()-25:
@@ -240,7 +273,7 @@ class ProfileCategories:
         tree.configure(cursor='')
         for group in [*self.category_rows, 'uncategorized']:
             if tree.exists(group):
-                tree.item(group, tags=())
+                tree.item(group, tags=('category_header',))
         if drag and drag[3] and target:
             path = self.list_paths.get(drag[0])
             if path:
@@ -262,7 +295,7 @@ class ProfileCategories:
         self.profile_list.configure(cursor='')
         for group in [*self.category_rows, 'uncategorized']:
             if self.profile_list.exists(group):
-                self.profile_list.item(group, tags=())
+                self.profile_list.item(group, tags=('category_header',))
         return 'break'
 
     def rename_selected_category(self, event=None):
@@ -313,6 +346,7 @@ class ProfileCategories:
     def save_category_expansion(self):
         if not self.winfo_exists():
             return
+        if self.search_text.get().strip(): return
         categories = self.categories()
         changed = False
         for category in categories:

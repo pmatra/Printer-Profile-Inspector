@@ -45,9 +45,9 @@ with tempfile.TemporaryDirectory() as d:
     app.make_default.set(True)
     app.save_default_directory()
     assert m.SETTINGS_PATH.exists()
-    app.load(str(path))
+    app.load(str(path), background=False)
     assert app.primary is not None
-    app.load(str(path), True)
+    app.load(str(path), True, background=False)
     for view in ['Points', 'Surface', 'Wireframe']:
         app.view.set(view); app.draw(); app.update()
     app.clear(); app.reset()
@@ -59,12 +59,12 @@ with tempfile.TemporaryDirectory() as d:
         assert victim.exists(), 'No must preserve the file'
         assert str(victim) in question.call_args.args[1]
         assert question.call_args.kwargs['default'] == m.messagebox.NO
-    with patch.object(m.messagebox, 'askyesno', return_value=True), patch.object(Path, 'unlink', side_effect=PermissionError('Access denied')), patch.object(m.messagebox, 'showerror') as error:
+    with patch.object(m.messagebox, 'askyesno', return_value=True), patch.object(m, 'recycle_profile', side_effect=PermissionError('Access denied')), patch.object(m.messagebox, 'showerror') as error:
         app.delete_profile(victim)
         assert victim.exists()
         error.assert_called_once()
-    app.load(str(victim))
-    with patch.object(m.messagebox, 'askyesno', return_value=True):
+    app.load(str(victim), background=False)
+    with patch.object(m.messagebox, 'askyesno', return_value=True), patch.object(m, 'recycle_profile', side_effect=lambda p:Path(p).unlink()):
         app.delete_profile(victim)
     assert not victim.exists() and app.primary is None and app.path is None
     assert victim not in app.list_paths.values()

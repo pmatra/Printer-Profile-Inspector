@@ -1,75 +1,90 @@
-# ICC Gamut Inspector
+# ICC Profile Inspector
 
-[Download the latest Windows release](https://github.com/pmatra/Printer-Profile-Inspector/releases/latest) · [Release v0.2.0](https://github.com/pmatra/Printer-Profile-Inspector/releases/tag/v0.2.0)
+[Download the latest Windows release](https://github.com/pmatra/Printer-Profile-Inspector/releases/latest)
 
-Download the Windows ZIP under **Assets**, extract the entire archive, and run the executable inside the application folder. Each release tag identifies the matching source revision.
+Windows ICC printer-profile inspection, organization, and interactive D50 CIELAB gamut comparison. Extract the complete Windows ZIP and run **ICC Gamut Inspector.exe**. Keep `_internal` beside it. Python is not required for the packaged app.
 
-Run `ICC Gamut Inspector.exe` in the application folder. No Python installation is needed for the packaged application. You can also pass an ICC/ICM file path on the command line.
+## Settings and single-instance operation
 
-Use the **gear button in the upper-right corner → Theme** to select **Windows Light**, **Windows Dark**, or **Follow Windows** (the default). The choice is saved alongside the directory preference in `settings.json`. Follow Windows checks the Windows app appearance setting while the program is open. Text, controls, tables, and the plot background and labels adapt; sampled gamut colors retain their color meaning. Ctrl+, also opens the settings menu.
+The normal application permits one instance per Windows user across desktop sessions, including launches from different release folders. A second launch brings the existing window forward; open another profile within that window.
 
-**High GPU** is the default 3D renderer. It uses hardware OpenGL, interpolated vertex colors, depth testing, and an offscreen render target at up to twice the viewport width and height (four render pixels per displayed pixel), downsampled for smoother edges. The renderer line reports the actual graphics device and render-target resolution. The default sampling grid is 17 per channel; 21 is also available. CMYK grids have N⁴ samples, so higher settings take longer. ICC sampling and hull construction run on the CPU; OpenGL handles the 3D drawing. Gamut colors are interpolated without artificial lighting. Red, gold, and gray axes indicate a*, b*, and L* respectively.
+Preferences live at **`%APPDATA%\PrinterProfileICCInspector\settings.json`**. Saves use a same-directory temporary file, flush/fsync, and atomic replacement. `settings.json.bak` retains the previous known-good state. Malformed settings are preserved as `settings.corrupt-*.json`; recovery or a fallback to defaults is explicitly reported.
 
-Choose **Basic CPU** for the previous renderer. If hardware OpenGL or the required framebuffer features are unavailable, the application falls back to Basic CPU and displays the reason. Render targets are capped at 4096 pixels per dimension; the reported size reflects any reduction. A graphics driver with OpenGL framebuffer/blit support is required for High GPU. Rendering quality does not turn the sampled convex hull into an exact gamut boundary.
+For the first upgrade from v0.4.0 or earlier, put the old portable `settings.json` beside the new executable before launching. It is imported only if AppData settings do not already exist. The original is preserved. Subsequent upgrades require no preference copying.
 
-The top tabs switch between **ICC/Gamut Inspector** and **Profile List**. The list initially reads `C:\Windows\System32\spool\drivers\color` and displays directory contents with Filename, Version, Device color space, Created, and Status columns. Created is the ICC header creation date, not the filesystem date. Click a column heading to sort. Double-click a profile to open it in the inspector; double-click a folder to browse into it.
+**⚙ → Theme** offers Windows Light, Windows Dark, and Follow Windows. Controls use the Windows system font, shaded buttons with soft drop shadows, and bold shaded category headers. Raw hexadecimal bytes retain a monospace font.
 
-### Profile checkboxes and categories
+## Profile List
 
-Every ICC/ICM profile has a checkbox in the left column. Check profiles and click **Create category from checked…**, then enter a category name. A collapsible category appears with those profiles inside it. With no profiles checked, the same button creates an empty category. Click the **Check** column heading to check/uncheck all profiles, including profiles inside collapsed categories; **Clear checks** clears the selection.
+The initial folder is the Windows color directory, normally `C:\Windows\System32\spool\drivers\color`. Open Directory chooses another folder; the default checkbox saves it. Columns show filename, ICC version, device color space, ICC creation date, and status. Heading sorts survive refresh, folding, category moves, and restart.
 
-Drag a profile's filename onto a category heading (or onto a profile inside that category) to organize it. If the dragged profile is checked, all checked profiles move together. The destination category highlights during the drag. Drop onto **Uncategorized** to remove the category assignment, or use the profile's right-click **Move to Uncategorized** option.
+**Search** matches list attributes and category names. Clear Search restores all entries. **Check** selects/unselects matching profiles, including matching children inside collapsed groups. Clear checks also clears hidden checks. The checked count includes checked profiles hidden by Search.
 
-Use the arrow beside a category to expand/collapse it. Click its name to rename it inline, then press Enter or click elsewhere to save; Escape cancels. **Rename category**, F2, and right-click **Rename category…** are also available. Categories and their expanded/collapsed state are saved per directory in `settings.json`, alongside your theme and default directory. These are virtual groups: organizing profiles never moves or rewrites the actual files. Each profile belongs to one category at a time; unmatched files and folders appear under Uncategorized.
+- Check profiles and use **Create category from checked…**. With no checks, this creates an empty category.
+- Drag a filename onto a category heading or one of its children. Dragging a checked profile moves all checked profiles together; the target highlights and Escape cancels.
+- Click a category name to rename inline. Enter saves, Escape cancels; F2, Rename category, and the context menu also work.
+- Arrows expand/collapse categories. Membership and expansion state are saved per directory.
+- Right-click a category and choose **Remove category… (keep profile files)**. Its profiles return to Uncategorized after confirmation. No ICC files are moved or deleted.
+- Right-click a categorized profile and choose Move to Uncategorized to remove only its assignment.
 
-Right-click an ICC/ICM profile in **Profile List** and choose **Delete profile…**. A Yes/No confirmation shows the exact filename and full path, with **No** selected by default. **Yes** permanently deletes that file and refreshes the list. Files that Windows does not permit you to delete show an error and remain listed.
+### Recycle Bin
 
-On **Profile List**, use **Open Directory** to browse another folder, then check **Make this directory default** to use that folder on future launches. Unchecking restores the Windows color directory as the startup default. The preference is stored in `settings.json` beside the executable (or beside the Python source when running from source); keep the application in a writable folder. **Refresh** reloads the directory contents. Unreadable profiles remain listed with an explanatory status.
+Right-click a profile and select **Move profile to Recycle Bin…**. A filename/path-specific Yes/No confirmation defaults to No. The app uses the Windows Recycle Bin, rejects non-fixed/network/removable drives, and reports permission/recycling errors without falling back to permanent deletion. Restored files may need to be categorized again.
 
-Open a printer profile with **Open profile**. Drag the plot to rotate and scroll to zoom. Use **Compare** to overlay a second profile as a cyan wireframe. Select Surface, Points, or Wireframe and choose a rendering intent or sampling grid. **Export samples** saves the primary profile's D50 CIELAB samples to CSV.
+### Install Profile
 
-The left panel shows ICC header fields and tag signatures, types, sizes, and raw hexadecimal data. Tag previews are limited to 16 KiB. This is a structural inspector, not an ICC conformance validator.
+**Install Profile…** validates an ICC/ICM file, then uses Windows `InstallColorProfileW` to install/copy it into the system color directory. A dedicated helper requests administrator approval if required. A different existing file with the same filename is not overwritten. The operation does not change printer defaults or device associations. The list opens the Windows color folder on success.
 
-## Color interpretation
+## Inspector, tags, and rendering
 
-Gamut calculations use Pillow's LittleCMS engine to transform device samples to D50 Lab. RGB, CMYK, and gray profiles are supported for sampling when the profile supplies a usable transform. Other profile types can still be inspected. CMYK sampling covers the full device grid, including high total ink values; it does not apply a separate ink-limit model.
+Double-click a profile or use Open profile. The ICC tags view has human-readable tag names, **Decoded tag** and **Raw bytes** tabs, and actual curve graphs.
 
-Surface mode displays a **convex hull approximation** of a finite grid of device samples. It may fill concavities and miss narrow features. It is not an exact gamut boundary or a certified measurement. Increase the grid density to examine sampling differences. Gray profiles display a point sequence rather than a volume. Display colors are converted to sRGB and may clip; the plot is not a monitor-calibrated soft proof. Hover reports sampled Lab values, not interpolated surface values. No exact gamut volume or overlap percentage is claimed.
+Decoders cover descriptions (`text`, `desc`, `mluc`), XYZ white/black points and colorants, adaptation matrices (`sf32`), sampled/gamma and parametric tone curves (`curv`, `para`), and LUTs (`mft1`, `mft2`, `mAB`, `mBA`). LUT details include channel counts, grids, precision, matrices, input/output curves, and initial normalized CLUT values. Long curves are graphed using up to 1,024 displayed points. Unsupported encodings are clearly identified; raw previews retain up to 16 KiB. This is not a conformance validator.
 
-## Source and rebuilding
+**High GPU** uses hardware OpenGL, smooth colors, depth testing, and up to twice the viewport width/height for cleaner edges, capped at 4,096 pixels per dimension. Actual GPU and resolution are shown. Unsupported hardware falls back to Basic CPU with a reason.
 
-The complete application is implemented in `inspector.py`; the original reference viewer's executable and DLLs are not its source files.
+**X-ray comparison** is enabled by default so a smaller cyan comparison wireframe remains visible inside an opaque primary. Turning it off restores normal GPU comparison occlusion; the primary always retains depth testing. The legend names both files and the active mode. Basic CPU uses a wireframe overlay.
 
-| File | Purpose |
+Drag to orbit, scroll to zoom, and use Reset view to restore the camera. CPU Points uses at most 4,000 representative samples (1,500 during orbit); GPU Points uses at most 30,000. Display decimation does not affect the complete sampled data, hull, or CSV export. Draw requests are coalesced and render data cached.
+
+ICC sampling/hull construction run on a worker thread; Tk widgets/rendering stay on the UI thread. Obsolete jobs are ignored. The default grid is 17/channel, with up to 21 available. CMYK has N⁴ samples. Export saves every sampled Lab value, intent, and filename.
+
+### Color limitations
+
+Pillow/LittleCMS transforms RGB, CMYK, and gray profiles to D50 Lab where supported. Surfaces are finite **sampled convex hulls**, which can fill concavities and miss narrow features. An 8-bit Lab intermediate is used. CMYK has no independent total-ink constraint. Display colors use sRGB and may clip; the plot is not a calibrated soft proof. Higher rendering resolution improves presentation, not colorimetric accuracy. No exact volume/overlap claim is made.
+
+## Development
+
+Tested runtime: Python 3.12 on Windows. GUI tests need a graphical desktop; GPU tests need hardware OpenGL. Installation/deletion regression tests mock OS operations rather than changing installed profiles.
+
+| Source | Purpose |
 | --- | --- |
-| `inspector.py` | ICC parsing, profile directory browser, desktop interface, color transforms, 3D plotting, and export |
-| `gamut_gpu.py` | Hardware OpenGL viewport, smooth vertex-color surfaces, depth testing, and supersampling |
-| `profile_categories.py` | Profile checkboxes, virtual accordion categories, inline rename, and drag-and-drop |
-| `check_categories.py` | Category interaction, directory scoping, unchanged-file, and persistence checks |
-| `check_inspector.py` | Regression checks for profile parsing, color sampling, interface views, and saved defaults |
-| `check_gpu.py` | Hardware-rendering smoke test including real framebuffer pixels, view modes, resizing, and renderer switching |
-| `preview_list.py` | Launch the application with the Profile List tab selected |
-| `build.ps1` | Build the Windows application using PyInstaller |
-| `requirements.txt` | Dependency version ranges |
-| `requirements-lock.txt` | Exact dependency versions used for the Windows build |
-| `.gitignore` | Exclude generated builds, local settings, and virtual environments |
-
-Run the existing regression checks with `python check_inspector.py` after installing the dependencies. These checks open desktop windows and require a graphical desktop. Additional checks use installed Windows printer profiles when available.
-
-Run `python check_categories.py` to check checkbox clicks, category creation, drag-and-drop, inline renaming, saved expansion state, and preservation of the original profile files.
-
-Run `python check_gpu.py` to verify actual hardware rendering. This test requires a supported GPU and fails explicitly if the program falls back to CPU rendering. Use `build.ps1` to package the app with dynamically loaded OpenGL modules included.
-
-Source: `inspector.py`. Python 3.12 or later is recommended.
+| `inspector.py` | UI, ICC parsing, background sampling, CPU renderer, export |
+| `app_support.py` | Atomic AppData preferences/recovery, Windows mutex, install, Recycle Bin |
+| `ui_style.py` | Windows system typography and shaded button surfaces |
+| `icc_tags.py` | Bounded ICC tag/curve/LUT decoders |
+| `gamut_gpu.py` | OpenGL rendering, X-ray comparison, supersampling |
+| `profile_categories.py` | Groups, checkboxes, sorting, search, drag/drop, category removal |
+| `check_inspector.py`, `check_categories.py` | Existing application/category regressions |
+| `check_gpu.py` | Real framebuffer pixels, enclosed comparison, CPU point limits, mode/resize checks |
+| `check_upgrade.py` | Recovery, cross-process mutex, search/sort, background jobs, install contract, tags |
+| `preview_list.py` | Normal single-instance startup on Profile List |
+| `build.ps1` | Windows packaging with required dynamic modules |
+| `requirements.txt`, `requirements-lock.txt` | Dependency ranges and tested versions |
 
 ```powershell
 python -m venv .venv
 .venv\Scripts\python -m pip install -r requirements.txt
+.venv\Scripts\python check_inspector.py
+.venv\Scripts\python check_categories.py
+.venv\Scripts\python check_upgrade.py
+.venv\Scripts\python check_gpu.py
 .venv\Scripts\python inspector.py
 .venv\Scripts\Activate.ps1
 .\build.ps1
 ```
 
-Built independently using the reference viewer's documented header/tag inspection functions as a feature reference. No reference executable, icon, or DLL was copied into this application.
+The executable supports `--gpu-check <report.json>` for an isolated diagnostic using temporary preferences.
 
-Libraries: [Pillow / ImageCms](https://pillow.readthedocs.io/en/stable/reference/ImageCms.html), NumPy, SciPy, Tk, and PyInstaller. Dependency licenses are included in the packaged application's `_internal` folder where supplied by their distributions.
+Built independently; no reference-viewer executable, icon, or DLL was copied. Libraries include Pillow/LittleCMS, NumPy, SciPy, Tk, PyOpenGL, pyopengltk, Send2Trash, pywin32, and PyInstaller. See [Windows installation API](https://learn.microsoft.com/en-us/windows/win32/api/icm/nf-icm-installcolorprofilew), [ICC.1:2022](https://www.color.org/specifications/ICC.1-2022-05.pdf), and [Send2Trash](https://github.com/arsenetar/send2trash). The original application source is licensed under [MIT](LICENSE). See [Third-party notices](THIRD_PARTY_NOTICES.md) and the accompanying [complete license texts](THIRD_PARTY_LICENSES.txt) for dependencies and bundled runtimes. These files are included alongside the Windows executable.
+

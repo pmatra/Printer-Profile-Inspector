@@ -7,6 +7,8 @@ pyinstaller==6.22.3
 pyinstaller-hooks-contrib==2026.10
 PyOpenGL==3.1.10
 pyopengltk==0.0.4
+pywin32==312
 pywin32-ctypes==0.2.3
 scipy==1.18.1
+Send2Trash==2.2.0
 setuptools==84.2.1

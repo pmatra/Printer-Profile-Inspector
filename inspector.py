@@ -5,6 +5,12 @@ import json
 import math
 import struct
 import sys
+import os
+import time
+import tempfile
+import subprocess
+from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
 from pathlib import Path
 from datetime import datetime
 import tkinter as tk
@@ -13,6 +19,9 @@ import numpy as np
 from scipy.spatial import ConvexHull
 from PIL import Image, ImageCms
 from profile_categories import ProfileCategories
+from app_support import SettingsStore, settings_path, SingleInstance, raise_existing_window, APP_TITLE, color_directory, recycle_profile, install_profile
+from icc_tags import decode_tag, TAG_NAMES
+from ui_style import system_font, shaded_buttons
 try:
     from gamut_gpu import GamutGPU
     GPU_IMPORT_ERROR = ''
@@ -21,21 +30,21 @@ except ImportError as exc:
     GPU_IMPORT_ERROR = str(exc)
 
 INTENTS = ['Perceptual', 'Relative colorimetric', 'Saturation', 'Absolute colorimetric']
-DEFAULT_DIRECTORY = Path(r'C:\Windows\System32\spool\drivers\color')
-SETTINGS_PATH = Path(sys.executable if getattr(sys, 'frozen', False) else __file__).resolve().parent / 'settings.json'
+DEFAULT_DIRECTORY = color_directory()
+LEGACY_SETTINGS_PATH = Path(sys.executable if getattr(sys, 'frozen', False) else __file__).resolve().parent / 'settings.json'
+SETTINGS_PATH = settings_path()
+SETTINGS_NOTICES = []
 THEMES = ('Windows Light', 'Windows Dark', 'Follow Windows')
 
 def read_settings():
     try:
-        value = json.loads(SETTINGS_PATH.read_text(encoding='utf-8'))
-        return value if isinstance(value, dict) else {}
-    except (OSError, ValueError):
+        return SettingsStore(SETTINGS_PATH, LEGACY_SETTINGS_PATH if SETTINGS_PATH == settings_path() else None, SETTINGS_NOTICES).read()
+    except OSError as exc:
+        SETTINGS_NOTICES.append(f'Settings could not be read at {SETTINGS_PATH}: {exc}. Existing files were preserved; defaults are in use.')
         return {}
 
 def save_setting(key, value):
-    settings = read_settings()
-    settings[key] = value
-    SETTINGS_PATH.write_text(json.dumps(settings, indent=2), encoding='utf-8')
+    SettingsStore(SETTINGS_PATH, LEGACY_SETTINGS_PATH if SETTINGS_PATH == settings_path() else None, SETTINGS_NOTICES).update(key, value)
 
 def windows_is_dark():
     try:
@@ -128,10 +137,38 @@ def sample_gamut(path, intent=1, density=9):
     return {'path': str(path), 'lab': lab, 'points': points, 'rgb': rgb,
             'hull': hull, 'samples': len(points), 'intent': intent}
 
+@lru_cache(maxsize=4)
+def cached_sample(path, modified, size, intent, density):
+    return sample_gamut(path, intent, density)
+
+def display_indices(result, maximum):
+    cache = result.setdefault('display_indices', {})
+    if maximum not in cache:
+        count = len(result['points'])
+        hull = result['hull']
+        boundary = hull.vertices if hull is not None else np.array([], dtype=int)
+        if len(boundary) >= maximum:
+            indices = boundary[np.linspace(0,len(boundary)-1,maximum).astype(int)]
+        elif count > maximum:
+            regular = np.linspace(0,count-1,maximum-len(boundary)).astype(int)
+            indices = np.unique(np.concatenate((boundary,regular)))
+        else:
+            indices = np.arange(count)
+        cache[maximum] = indices
+    return cache[maximum]
+
 class Inspector(ProfileCategories, tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title('ICC Gamut Inspector')
+        self.title(APP_TITLE)
+        self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='icc-sampling')
+        self.jobs = []
+        self.job_generation = {'primary':0, 'comparison':0}
+        self.closing = False
+        self.draw_pending = None
+        self.detail_pending = None
+        self.interacting = False
+        self.tag_curves = []
         self.geometry('1280x820')
         self.minsize(980, 650)
         self.configure(bg='#111720')
@@ -139,8 +176,9 @@ class Inspector(ProfileCategories, tk.Tk):
         self.theme_choice = tk.StringVar(value=preference if preference in THEMES else 'Follow Windows')
         self.active_dark = None
         style = ttk.Style(self)
+        self.ui_family, self.ui_size = system_font(self)
         style.theme_use('clam')
-        style.configure('.', background='#1c2532', foreground='#e3eaf4', font=('Segoe UI', 10))
+        style.configure('.', background='#1c2532', foreground='#e3eaf4', font=(self.ui_family, self.ui_size))
         style.configure('TButton', padding=8)
         style.map('TCombobox', fieldbackground=[('readonly', '#26374b')], foreground=[('readonly','#e3eaf4')])
         style.configure('TNotebook.Tab', background='#26374b', padding=(10, 7))
@@ -155,6 +193,7 @@ class Inspector(ProfileCategories, tk.Tk):
         self.render_mode = tk.StringVar(value='High GPU')
         self.gpu = None
         self.view = tk.StringVar(value='Surface')
+        self.xray = tk.BooleanVar(value=True)
         self.main_tabs = ttk.Notebook(self)
         self.main_tabs.pack(fill='both', expand=True, padx=8, pady=8)
         self.inspector_tab = ttk.Frame(self.main_tabs)
@@ -162,7 +201,7 @@ class Inspector(ProfileCategories, tk.Tk):
         self.main_tabs.add(self.inspector_tab, text='ICC/Gamut Inspector')
         self.main_tabs.add(self.list_tab, text='Profile List')
         bar = ttk.Frame(self.inspector_tab, padding=12); bar.pack(fill='x')
-        ttk.Label(bar, text='ICC / GAMUT INSPECTOR', font=('Segoe UI', 17, 'bold')).pack(side='left', padx=(0, 25))
+        ttk.Label(bar, text='ICC / GAMUT INSPECTOR', font=(self.ui_family, 17, 'bold')).pack(side='left', padx=(0, 25))
         ttk.Button(bar, text='Open profile…', command=self.open).pack(side='left', padx=4)
         ttk.Button(bar, text='Compare…', command=lambda: self.open(True)).pack(side='left', padx=4)
         ttk.Button(bar, text='Clear comparison', command=self.clear).pack(side='left', padx=4)
@@ -182,20 +221,35 @@ class Inspector(ProfileCategories, tk.Tk):
                                    values=['High GPU', 'Basic CPU'], state='readonly', width=14)
         renderer_box.pack(side='left')
         renderer_box.bind('<<ComboboxSelected>>', self.select_renderer)
+        ttk.Checkbutton(render_controls, text='X-ray comparison', variable=self.xray, command=self.draw).pack(side='left', padx=10)
         self.gpu_label = ttk.Label(render_controls, text='Initializing hardware OpenGL…', padding=(12, 0))
         self.gpu_label.pack(side='left')
+        self.legend = ttk.Label(self.inspector_tab, padding=(20,4), wraplength=1100)
+        self.legend.pack(fill='x')
         split = ttk.Panedwindow(self.inspector_tab, orient='horizontal'); split.pack(fill='both', expand=True, padx=12)
         tabs = ttk.Notebook(split); split.add(tabs, weight=1)
         info = ttk.Frame(tabs); tabs.add(info, text='Profile header')
-        self.header = tk.Text(info, wrap='word', bg='#16202d', fg='#e3eaf4', relief='flat', width=36, font=('Consolas', 10), padx=12, pady=12)
+        self.header = tk.Text(info, wrap='word', bg='#16202d', fg='#e3eaf4', relief='flat', width=36, font=(self.ui_family, self.ui_size), padx=12, pady=12)
         self.header.pack(fill='both', expand=True)
         tagpage = ttk.Frame(tabs); tabs.add(tagpage, text='ICC tags')
-        self.tags = ttk.Treeview(tagpage, columns=('type','size'), show='tree headings', height=10)
+        self.tags = ttk.Treeview(tagpage, columns=('description','type','size'), show='tree headings', height=5)
         self.tags.heading('#0', text='Tag'); self.tags.column('#0', width=70)
-        for col in ('type','size'):
+        for col in ('description','type','size'):
             self.tags.heading(col, text=col.title()); self.tags.column(col, width=80)
+        self.tags.column('description',width=145)
         self.tags.pack(fill='x'); self.tags.bind('<<TreeviewSelect>>', self.tag_selected)
-        self.raw = tk.Text(tagpage, bg='#16202d', fg='#c2d3e7', wrap='none', width=36, font=('Consolas',9))
+        details_tabs = ttk.Notebook(tagpage)
+        details_tabs.pack(fill='both',expand=True)
+        decoded = ttk.Frame(details_tabs); raw_frame = ttk.Frame(details_tabs)
+        details_tabs.add(decoded,text='Decoded tag'); details_tabs.add(raw_frame,text='Raw bytes')
+        self.tag_details = tk.Text(decoded, wrap='word', width=36, height=6, font=(self.ui_family, self.ui_size))
+        self.tag_details.grid(row=0,column=0,sticky='nsew')
+        self.tag_plot = tk.Canvas(decoded,height=150,highlightthickness=0)
+        self.tag_plot.grid(row=1,column=0,sticky='nsew')
+        decoded.columnconfigure(0,weight=1)
+        decoded.rowconfigure(0,weight=1); decoded.rowconfigure(1,weight=2)
+        self.tag_plot.bind('<Configure>',lambda e:self.render_tag_plot())
+        self.raw = tk.Text(raw_frame, bg='#16202d', fg='#c2d3e7', wrap='none', width=36, font=('Consolas',9))
         self.raw.pack(fill='both', expand=True)
         right = ttk.Frame(split); split.add(right, weight=3)
         self.render_host = right
@@ -223,6 +277,30 @@ class Inspector(ProfileCategories, tk.Tk):
         self.apply_theme()
         self.select_renderer()
         self.after(1500, self.watch_windows_theme)
+        self.after(30, self.poll_jobs)
+        self.after_idle(self.report_settings_recovery)
+
+    def report_settings_recovery(self):
+        if SETTINGS_NOTICES:
+            notices = list(dict.fromkeys(SETTINGS_NOTICES)); SETTINGS_NOTICES.clear()
+            messagebox.showwarning('Settings recovery / migration', '\n\n'.join(notices), parent=self)
+
+    def destroy(self):
+        self.closing = True
+        for future, *_ in self.jobs: future.cancel()
+        self.executor.shutdown(wait=False, cancel_futures=True)
+        super().destroy()
+
+    def schedule_draw(self):
+        if self.draw_pending is None:
+            self.draw_pending = self.after(25, self.flush_draw)
+
+    def point_indices(self,result,maximum):
+        return display_indices(result,maximum)
+
+    def flush_draw(self):
+        self.draw_pending = None
+        self.draw()
 
     def show_settings(self):
         self.settings_menu.tk_popup(self.gear_button.winfo_rootx(),
@@ -290,9 +368,9 @@ class Inspector(ProfileCategories, tk.Tk):
         p = self.colors
         style = ttk.Style(self)
         style.configure('.', background=p['bg'], foreground=p['text'], bordercolor=p['border'],
-                        lightcolor=p['bg'], darkcolor=p['border'], font=('Segoe UI', 10))
+                        lightcolor=p['bg'], darkcolor=p['border'], font=(self.ui_family, self.ui_size))
         style.configure('TButton', background=p['panel'], foreground=p['text'], padding=8)
-        style.map('TButton', background=[('active', p['hover']), ('pressed', p['selected'])])
+        shaded_buttons(self, style, p, self.active_dark)
         style.configure('TNotebook', background=p['bg'])
         style.configure('TNotebook.Tab', background=p['panel'], foreground=p['text'], padding=(10,7))
         style.map('TNotebook.Tab', background=[('selected',p['selected']), ('active',p['hover'])],
@@ -313,10 +391,14 @@ class Inspector(ProfileCategories, tk.Tk):
         style.configure('Vertical.TScrollbar', background=p['panel'], troughcolor=p['bg'], arrowcolor=p['text'])
         style.configure('Horizontal.TScrollbar', background=p['panel'], troughcolor=p['bg'], arrowcolor=p['text'])
         self.configure(bg=p['bg'])
-        for text in (self.header, self.raw):
+        for text in (self.header, self.raw, self.tag_details):
             text.configure(bg=p['field'], fg=p['text'], insertbackground=p['text'],
                            selectbackground=p['selected'], selectforeground=p['selection_text'])
         self.canvas.configure(bg=p['plot'])
+        self.tag_plot.configure(bg=p['field'])
+        self.render_tag_plot()
+        self.profile_list.tag_configure('category_header', background=('#343b43' if self.active_dark else '#e7edf3'),
+                                        foreground=p['text'], font=(self.ui_family,self.ui_size,'bold'))
         self.profile_list.tag_configure('drop_target', background=p['selected'], foreground=p['selection_text'])
         for menu in (self.settings_menu, self.theme_menu, self.profile_menu):
             menu.configure(background=p['panel'], foreground=p['text'], activebackground=p['selected'],
@@ -358,6 +440,14 @@ class Inspector(ProfileCategories, tk.Tk):
                         command=self.save_default_directory).pack(side='left', padx=16)
         ttk.Button(toolbar, text='Refresh', command=self.refresh_directory).pack(side='left')
         ttk.Button(toolbar, text='Open selected profile', command=self.open_list_selection).pack(side='right')
+        search_bar = ttk.Frame(self.list_tab,padding=(12,0,12,6)); search_bar.pack(fill='x')
+        ttk.Label(search_bar,text='Search').pack(side='left',padx=(0,8))
+        self.search_text = tk.StringVar()
+        ttk.Entry(search_bar,textvariable=self.search_text).pack(side='left',fill='x',expand=True)
+        ttk.Button(search_bar,text='Clear',command=lambda:self.search_text.set('')).pack(side='left',padx=8)
+        ttk.Button(search_bar,text='Install Profile…',command=self.install_selected_profile).pack(side='right')
+        self.search_pending = None
+        self.search_text.trace_add('write',self.search_changed)
         category_bar = ttk.Frame(self.list_tab, padding=(12, 0, 12, 6))
         category_bar.pack(fill='x')
         ttk.Button(category_bar, text='Create category from checked…', command=self.create_category).pack(side='left')
@@ -388,11 +478,67 @@ class Inspector(ProfileCategories, tk.Tk):
         self.directory_status = ttk.Label(self.list_tab, padding=12)
         self.directory_status.pack(fill='x')
         self.sort_reverse = {}
+        saved_sort = read_settings().get('profile_sort',{})
+        self.active_sort_column = saved_sort.get('column','filename') if isinstance(saved_sort,dict) else 'filename'
+        if self.active_sort_column not in columns: self.active_sort_column = 'filename'
+        self.active_sort_reverse = bool(saved_sort.get('reverse',False)) if isinstance(saved_sort,dict) else False
+        self.sort_clicked = bool(saved_sort)
         self.setup_categories(read_settings().get('profile_categories', {}))
         self.refresh_directory()
 
     def save_category_settings(self, value):
         save_setting('profile_categories', value)
+
+    def search_changed(self,*args):
+        if self.search_pending is not None: self.after_cancel(self.search_pending)
+        self.search_pending = self.after(150,self.apply_search)
+
+    def apply_search(self):
+        self.search_pending = None
+        self.render_library(self.library_rows)
+        self.directory_status.config(text=f'{len(self.list_paths)} matching items • {len(self.checked_profiles)} checked (including hidden matches). Clear Search to show every profile.')
+
+    def install_selected_profile(self):
+        selected = filedialog.askopenfilename(title='Install ICC profile into Windows', filetypes=[('ICC profiles','*.icc *.icm')])
+        if not selected: return
+        path = Path(selected).resolve()
+        try:
+            read_profile(path); ImageCms.getOpenProfile(str(path))
+            destination = install_profile(path)
+        except PermissionError:
+            if messagebox.askyesno('Administrator approval required', 'Windows requires administrator approval to install this profile. Request approval now?', default=messagebox.NO,parent=self):
+                self.install_elevated(path)
+            return
+        except Exception as exc:
+            messagebox.showerror('Profile was not installed',str(exc),parent=self); return
+        self.install_finished(destination)
+
+    def install_finished(self,destination):
+        self.directory = str(DEFAULT_DIRECTORY)
+        self.search_text.set('')
+        self.make_default.set(Path(self.directory)==Path(self.default_directory))
+        self.refresh_directory()
+        messagebox.showinfo('Profile installed',f'Installed in the Windows color directory:\n\n{destination}\n\nNo printer default or device association was changed.',parent=self)
+
+    def install_elevated(self,path):
+        import ctypes
+        result = Path(tempfile.mkdtemp(prefix='icc-install-'))/'result.json'
+        args = (['--install-profile',str(path),'--install-result',str(result)] if getattr(sys,'frozen',False)
+                else [str(Path(__file__).resolve()),'--install-profile',str(path),'--install-result',str(result)])
+        shell = ctypes.WinDLL('shell32',use_last_error=True)
+        shell.ShellExecuteW.argtypes = [ctypes.c_void_p,ctypes.c_wchar_p,ctypes.c_wchar_p,ctypes.c_wchar_p,ctypes.c_wchar_p,ctypes.c_int]
+        shell.ShellExecuteW.restype = ctypes.c_void_p
+        code = shell.ShellExecuteW(None,'runas',sys.executable,subprocess.list2cmdline(args),None,0)
+        if not code or code<=32:
+            messagebox.showerror('Profile was not installed','Administrator approval was cancelled or unavailable.',parent=self); return
+        def poll(deadline):
+            if result.exists():
+                report=json.loads(result.read_text(encoding='utf-8'))
+                if report['ok']: self.install_finished(report['destination'])
+                else: messagebox.showerror('Profile was not installed',report['error'],parent=self)
+            elif time.monotonic()<deadline: self.after(300,lambda:poll(deadline))
+            else: messagebox.showerror('Install status unavailable','Windows did not return an installation result. Refresh the profile list before trying again.',parent=self)
+        poll(time.monotonic()+120)
 
     def open_directory(self):
         selected = filedialog.askdirectory(title='Open profile directory', initialdir=self.directory)
@@ -425,11 +571,11 @@ class Inspector(ProfileCategories, tk.Tk):
             self.directory_status.config(text=f'Cannot read directory: {exc} • Use Open Directory to choose another folder.')
 
     def sort_directory(self, column):
-        reverse = self.sort_reverse.get(column, False)
-        for parent in self.profile_list.get_children():
-            rows = sorted(self.profile_list.get_children(parent), key=lambda i: self.profile_list.set(i, column).casefold(), reverse=reverse)
-            for index, item in enumerate(rows): self.profile_list.move(item, parent, index)
-        self.sort_reverse[column] = not reverse
+        self.active_sort_reverse = (not self.active_sort_reverse) if self.sort_clicked and column==self.active_sort_column else False
+        self.active_sort_column = column; self.sort_clicked = True
+        self.apply_library_sort()
+        try: save_setting('profile_sort',{'column':column,'reverse':self.active_sort_reverse})
+        except OSError as exc: messagebox.showerror('Sort preference could not be saved',str(exc),parent=self)
 
     def show_profile_menu(self, event):
         item = self.profile_list.identify_row(event.y)
@@ -440,6 +586,7 @@ class Inspector(ProfileCategories, tk.Tk):
         self.profile_menu.delete(0, 'end')
         if item in self.category_rows:
             self.profile_menu.add_command(label='Rename category…', command=lambda: self.begin_category_rename(item))
+            self.profile_menu.add_command(label='Remove category… (keep profile files)', command=lambda:self.remove_category(item))
             try:
                 self.profile_menu.tk_popup(event.x_root, event.y_root)
             finally:
@@ -451,7 +598,7 @@ class Inspector(ProfileCategories, tk.Tk):
         if self.profile_list.parent(item) != 'uncategorized':
             self.profile_menu.add_command(label='Move to Uncategorized', command=lambda p=path: self.move_profiles_to_category([str(p)], None))
         # Capture the clicked file so selection changes cannot redirect deletion.
-        self.profile_menu.add_command(label='Delete profile…', command=lambda p=path: self.delete_profile(p))
+        self.profile_menu.add_command(label='Move profile to Recycle Bin…', command=lambda p=path: self.delete_profile(p))
         try:
             self.profile_menu.tk_popup(event.x_root, event.y_root)
         finally:
@@ -464,15 +611,18 @@ class Inspector(ProfileCategories, tk.Tk):
             self.refresh_directory()
             return
         if not messagebox.askyesno('Delete profile?',
-                                  f'Do you want to delete this specific profile?\n\n{path.name}\n\n{path}\n\nThis permanently deletes the file.',
+                                  f'Move this specific profile to the Recycle Bin?\n\n{path.name}\n\n{path}\n\nYou can restore it from the Windows Recycle Bin.',
                                   icon='warning', default=messagebox.NO, parent=self):
             return
         try:
-            path.unlink()
+            recycle_profile(path)
         except OSError as exc:
             messagebox.showerror('Profile could not be deleted', f'{path}\n\n{exc}', parent=self)
             return
         self.checked_profiles.discard(str(path))
+        for future,slot,generation,job_path in self.jobs:
+            if Path(job_path)==path:
+                self.job_generation[slot]+=1; future.cancel()
         categories = self.categories()
         for category in categories:
             category['files'] = [f for f in category['files'] if f.casefold() != path.name.casefold()]
@@ -485,6 +635,8 @@ class Inspector(ProfileCategories, tk.Tk):
             self.tagdata = []
             self.settext(self.header, 'The loaded profile was deleted.')
             self.settext(self.raw, '')
+            self.settext(self.tag_details,'The loaded profile was moved to the Recycle Bin.')
+            self.tag_curves=[]; self.render_tag_plot()
             for item in self.tags.get_children():
                 self.tags.delete(item)
             self.subtitle.config(text='Open an ICC / ICM printer or RGB profile to begin.')
@@ -492,7 +644,7 @@ class Inspector(ProfileCategories, tk.Tk):
         if self.comparison and Path(self.comparison['path']) == path:
             self.comparison = None
         self.refresh_directory()
-        self.directory_status.config(text=f'Deleted profile: {path.name}')
+        self.directory_status.config(text=f'Moved to Recycle Bin: {path.name}')
         self.draw()
 
     def open_list_selection(self, event=None):
@@ -520,26 +672,55 @@ class Inspector(ProfileCategories, tk.Tk):
         path = filedialog.askopenfilename(title='Choose comparison profile' if compare else 'Open ICC profile', initialdir=self.directory, filetypes=[('ICC profiles','*.icc *.icm'),('All files','*.*')])
         if path: self.load(path, compare)
 
-    def load(self, path, compare=False):
+    def load(self, path, compare=False, background=True):
         try:
+            path = str(Path(path).resolve())
+            slot = 'comparison' if compare else 'primary'
+            self.job_generation[slot] += 1
+            generation = self.job_generation[slot]
+            for future, old_slot, *_ in self.jobs:
+                if old_slot == slot: future.cancel()
             if not compare:
                 data, fields, tags = read_profile(path)
                 self.path, self.data, self.tagdata = path, data, tags
                 self.primary = None
                 self.settext(self.header, '\n\n'.join(f'{k}\n{v}' for k,v in fields))
                 for item in self.tags.get_children(): self.tags.delete(item)
-                for i,(sig,typ,off,size) in enumerate(tags): self.tags.insert('', 'end', iid=str(i), text=sig, values=(typ,f'{size:,}'))
+                for i,(sig,typ,off,size) in enumerate(tags): self.tags.insert('', 'end', iid=str(i), text=sig, values=(TAG_NAMES.get(sig,'ICC tag'),typ,f'{size:,}'))
                 self.settext(self.raw, 'Select a tag to inspect its raw bytes.')
+                self.settext(self.tag_details,'Select an ICC tag to see decoded data and curves.')
+                self.tag_curves=[]; self.render_tag_plot()
                 self.subtitle.config(text=Path(path).name)
+            else:
+                read_profile(path)
+                self.comparison = None
             self.status.config(text='Sampling ICC transform…'); self.update_idletasks()
-            result = sample_gamut(path, INTENTS.index(self.intent.get()), int(self.density.get()))
-            if compare: self.comparison = result
-            else: self.primary = result
-            self.report()
+            stat = Path(path).stat()
+            args=(path,stat.st_mtime_ns,stat.st_size,INTENTS.index(self.intent.get()),int(self.density.get()))
+            if background:
+                self.jobs.append((self.executor.submit(cached_sample,*args),slot,generation,path))
+            else:
+                result = cached_sample(*args)
+                setattr(self,slot,result); self.report()
         except Exception as exc:
             messagebox.showerror('Profile could not be plotted', str(exc))
             self.status.config(text=str(exc))
         self.draw()
+
+    def poll_jobs(self):
+        if self.closing: return
+        if SETTINGS_NOTICES: self.report_settings_recovery()
+        remaining=[]
+        for future,slot,generation,path in self.jobs:
+            if not future.done(): remaining.append((future,slot,generation,path)); continue
+            if future.cancelled() or generation!=self.job_generation[slot]: continue
+            try:
+                setattr(self,slot,future.result()); self.report(); self.draw()
+            except Exception as exc:
+                self.status.config(text=f'Could not sample {Path(path).name}: {exc}')
+                messagebox.showerror('Profile could not be plotted',f'{path}\n\n{exc}',parent=self)
+        self.jobs=remaining
+        self.after(30,self.poll_jobs)
 
     def report(self):
         if self.primary:
@@ -554,11 +735,19 @@ class Inspector(ProfileCategories, tk.Tk):
         if self.path: self.load(self.path)
         if other: self.load(other, True)
 
-    def clear(self): self.comparison = None; self.report(); self.draw()
+    def clear(self):
+        self.job_generation['comparison'] += 1
+        self.comparison = None; self.report(); self.draw()
     def reset(self): self.yaw, self.pitch, self.zoom = .65, -.35, 1.8; self.draw()
     def rotate(self, e):
-        x,y = self.drag; self.yaw += (e.x-x)*.01; self.pitch += (e.y-y)*.01; self.drag=(e.x,e.y); self.draw()
-    def wheel(self, e): self.zoom = max(.5, min(8, self.zoom * (1.1 if e.delta>0 else 1/1.1))); self.draw()
+        x,y = self.drag; self.yaw += (e.x-x)*.01; self.pitch += (e.y-y)*.01; self.drag=(e.x,e.y)
+        self.interacting=True; self.schedule_draw()
+        if self.detail_pending is not None: self.after_cancel(self.detail_pending)
+        self.detail_pending=self.after(140,self.end_interaction)
+    def wheel(self, e):
+        self.zoom = max(.5, min(8, self.zoom * (1.1 if e.delta>0 else 1/1.1))); self.schedule_draw()
+    def end_interaction(self):
+        self.detail_pending=None; self.interacting=False; self.schedule_draw()
 
     def project(self, points):
         c,s=math.cos(self.yaw),math.sin(self.yaw)
@@ -571,6 +760,11 @@ class Inspector(ProfileCategories, tk.Tk):
         return p
 
     def draw(self):
+        if not hasattr(self,'legend'): return
+        primary=Path(self.primary['path']).name if self.primary else 'No primary gamut loaded'
+        comparison_mode = ('CPU overlay' if self.render_mode.get()=='Basic CPU' else ('X-ray' if self.xray.get() else 'depth-tested'))
+        comparison=(f"Comparison: {Path(self.comparison['path']).name} • cyan wireframe • "+comparison_mode) if self.comparison else 'No comparison'
+        self.legend.config(text=f'Primary: {primary}  |  {comparison}')
         if self.render_mode.get() == 'High GPU' and self.gpu is not None:
             self.gpu.request_draw()
             return
@@ -580,27 +774,29 @@ class Inspector(ProfileCategories, tk.Tk):
         a=self.project(axes)
         for i,label,color in [(1,'a*','#ed8c9c'),(2,'b*','#e5cb73'),(3,'L*','#d4dce6')]:
             cv.create_line(*a[0,:2],*a[i,:2],fill=palette['axis'],arrow='last')
-            cv.create_text(*a[i,:2],text=label,fill=palette['text'],anchor='sw',font=('Segoe UI',11))
+            cv.create_text(*a[i,:2],text=label,fill=palette['text'],anchor='sw',font=(self.ui_family,11))
         if not self.primary and not self.comparison:
-            cv.create_text(cv.winfo_width()/2,cv.winfo_height()/2,text='Explore the color your profile can reproduce.\n\nOpen a printer ICC profile to see its sampled gamut.',fill=palette['muted'],justify='center',font=('Segoe UI',14))
+            cv.create_text(cv.winfo_width()/2,cv.winfo_height()/2,text='Explore the color your profile can reproduce.\n\nOpen a printer ICC profile to see its sampled gamut.',fill=palette['muted'],justify='center',font=(self.ui_family,14))
         for result, comparison in [(self.primary,False),(self.comparison,True)]:
             if result is None: continue
             p=self.project(result['points']); hull=result['hull']
             view='Wireframe' if comparison else self.view.get()
             if hull is not None and view != 'Points':
-                faces=sorted(hull.simplices,key=lambda t:p[t,2].mean())
-                for tri in faces:
-                    color='#'+''.join(f'{int(v):02x}' for v in result['rgb'][tri].mean(axis=0))
+                faces=sorted(enumerate(hull.simplices),key=lambda pair:p[pair[1],2].mean())
+                if 'cpu_face_colors' not in result:
+                    result['cpu_face_colors']=['#'+''.join(f'{int(v):02x}' for v in result['rgb'][tri].mean(axis=0)) for tri in hull.simplices]
+                for face_index,tri in faces:
+                    color=result['cpu_face_colors'][face_index]
                     cv.create_polygon(*p[tri,:2].flatten(),fill=color if view=='Surface' else '',outline=palette['compare'] if comparison else (color if view=='Surface' else palette['wire']),width=1)
                 indices=hull.vertices
             else:
-                indices=range(len(p))
+                indices=display_indices(result,1500 if self.interacting else 4000)
                 for i in sorted(indices,key=lambda i:p[i,2]):
                     x,y=p[i,:2]; color='#'+''.join(f'{v:02x}' for v in result['rgb'][i])
                     cv.create_oval(x-2,y-2,x+2,y+2,fill=color,outline='')
             if not comparison: self.hitpoints=[(p[i,0],p[i,1],result['lab'][i]) for i in indices]
-        cv.create_text(18,18,anchor='nw',text='CIELAB / D50',fill=palette['text'],font=('Segoe UI',12,'bold'))
-        cv.create_text(18,44,anchor='nw',text='Drag to orbit  ·  Scroll to zoom\nSurface = convex hull of sampled device colors',fill=palette['muted'],font=('Segoe UI',10))
+        cv.create_text(18,18,anchor='nw',text='CIELAB / D50',fill=palette['text'],font=(self.ui_family,12,'bold'))
+        cv.create_text(18,44,anchor='nw',text='Drag to orbit  ·  Scroll to zoom\nSurface = convex hull of sampled device colors',fill=palette['muted'],font=(self.ui_family,10))
 
     def hover(self,e):
         if not self.hitpoints:return
@@ -612,6 +808,9 @@ class Inspector(ProfileCategories, tk.Tk):
         selected=self.tags.selection()
         if not selected:return
         sig,typ,off,size=self.tagdata[int(selected[0])]
+        description,self.tag_curves=decode_tag(sig,self.data[off:off+size])
+        self.settext(self.tag_details,description)
+        self.render_tag_plot()
         raw=self.data[off:off+min(size,16384)]
         lines=[f'{sig} / {typ}\nOffset {off:,} • {size:,} bytes\n']
         for i in range(0,len(raw),16):
@@ -619,6 +818,26 @@ class Inspector(ProfileCategories, tk.Tk):
             lines.append(f'{i:06x}  {block.hex(" "):<47}  {chars}')
         if size>len(raw): lines.append('\nPreview limited to 16 KiB.')
         self.settext(self.raw,'\n'.join(lines))
+
+    def render_tag_plot(self):
+        if not hasattr(self,'tag_plot'): return
+        plot=self.tag_plot; plot.delete('all')
+        palette=getattr(self,'colors',{'text':'#202020','axis':'#777777'})
+        width,height=max(plot.winfo_width(),220),max(plot.winfo_height(),150)
+        if not self.tag_curves:
+            plot.create_text(width/2,height/2,text='Curve graph appears for TRC and LUT curve tags.',fill=palette['text'],width=width-24)
+            return
+        left,top,right,bottom=42,22,width-12,height-40
+        plot.create_line(left,top,left,bottom,right,bottom,fill=palette['axis'])
+        plot.create_text(left,top-10,text='Output',fill=palette['text'],anchor='w')
+        plot.create_text(right,bottom+14,text='Input 0 → 1',fill=palette['text'],anchor='e')
+        colors=['#e05555','#329b66','#528be8','#bd67c6','#b88718','#30a0ad']
+        lo=min(0,min(float(np.min(y)) for _,x,y in self.tag_curves)); hi=max(1,max(float(np.max(y)) for _,x,y in self.tag_curves))
+        for i,(name,x,y) in enumerate(self.tag_curves):
+            coordinates=np.column_stack((left+x*(right-left),bottom-(y-lo)/(hi-lo)*(bottom-top)))
+            plot.create_line(*coordinates.flatten(),fill=colors[i%len(colors)],width=2)
+        names=', '.join(name for name,_,_ in self.tag_curves)
+        plot.create_text(left,height-12,text=f'{names} • output {lo:.3g}…{hi:.3g}',fill=palette['text'],anchor='w',width=width-55)
 
     def export(self):
         if not self.primary: return messagebox.showinfo('Export','Open a supported profile first.')
@@ -631,7 +850,27 @@ class Inspector(ProfileCategories, tk.Tk):
                 self.status.config(text=f'Exported {len(self.primary["lab"]):,} Lab samples to {path}')
             except OSError as exc: messagebox.showerror('Export failed',str(exc))
 
+def main(initial_list=False):
+    guard=SingleInstance()
+    if not guard.acquire():
+        raise_existing_window(); return
+    try:
+        app=Inspector()
+        if initial_list: app.main_tabs.select(app.list_tab)
+        if len(sys.argv)>1: app.after(100,lambda:app.load(sys.argv[1]))
+        app.mainloop()
+    finally:
+        guard.close()
+
 if __name__=='__main__':
+    if len(sys.argv)==5 and sys.argv[1]=='--install-profile' and sys.argv[3]=='--install-result':
+        try:
+            read_profile(sys.argv[2]); ImageCms.getOpenProfile(sys.argv[2])
+            report={'ok':True,'destination':str(install_profile(sys.argv[2]))}
+        except Exception as exc: report={'ok':False,'error':str(exc)}
+        from app_support import atomic_write
+        atomic_write(Path(sys.argv[4]),json.dumps(report).encode('utf-8'))
+        sys.exit(0 if report['ok'] else 1)
     if len(sys.argv) == 3 and sys.argv[1] == '--gpu-check':
         from check_gpu import run_check
         try:
@@ -641,6 +880,4 @@ if __name__=='__main__':
             Path(sys.argv[2]).write_text(json.dumps({'passed': False, 'error': str(exc)}, indent=2), encoding='utf-8')
             sys.exit(1)
         sys.exit(0)
-    app=Inspector()
-    if len(sys.argv)>1: app.after(100,lambda:app.load(sys.argv[1]))
-    app.mainloop()
+    main()
