@@ -36,6 +36,8 @@ jobs:
         run: python check_platform.py
       - name: Profile/category regression checks
         run: python check_categories.py
+      - name: Update and UI regression checks
+        run: python check_updates.py
       - name: Adversarial-review regressions
         run: python check_adversarial.py
       - name: Build and smoke-test app bundle

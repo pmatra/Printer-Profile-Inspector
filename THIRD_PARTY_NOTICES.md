@@ -1,6 +1,6 @@
 # Third-party notices
 
-ICC Profile Inspector v0.6.0 — Windows distribution, prepared 2026-11-19.
+ICC Profile Inspector v0.8.0 — Windows distribution, prepared 2026-11-25.
 
 The application's original source code is Copyright (c) 2026 Peter Matra and
 licensed under [MIT](LICENSE). Third-party components keep their own copyright
@@ -84,3 +84,7 @@ obtained from these versioned upstream sources:
 
 When changing dependencies or rebuilding with another runtime, review and refresh
 these notices against the actual distributions and native libraries included.
+# Windows installer
+
+The Windows Setup executable is built with Inno Setup 7.1.1, copyright Jordan Russell and Martijn Laan. Its complete license is in `installer/INNO_SETUP_LICENSE.txt` and is installed alongside the application. Inno Setup is build tooling plus the installer/uninstaller engine; it is not required to run the portable application. The application license remains MIT.
+

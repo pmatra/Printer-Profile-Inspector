@@ -26,5 +26,18 @@ jobs:
         run: python check_adversarial.py
       - name: Platform dispatch checks
         run: python check_platform.py
+      - name: Update and UI regression checks
+        run: python check_updates.py
+      - name: Build Windows installer
+        run: |
+          $compiler = & ./installer/get-compiler.ps1 -Destination "$env:RUNNER_TEMP/inno-sdk"
+          ./build-installer.ps1 -Compiler $compiler
+      - name: Install, smoke-check and uninstall isolated test copy
+        run: ./installer/check-install.ps1 -Installer (Get-ChildItem dist/installer/*-x64.exe).FullName
+      - uses: actions/upload-artifact@v6
+        with:
+          name: Windows-installer
+          path: dist/installer/*-x64.exe
+          if-no-files-found: error
       # Hosted Windows VMs may expose software OpenGL only. Hardware pixel tests
       # remain a required manual release check on a real GPU, not a skipped pass.

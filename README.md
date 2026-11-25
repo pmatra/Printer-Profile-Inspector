@@ -64,6 +64,12 @@ Pillow/LittleCMS transforms RGB, CMYK, and gray profiles to D50 Lab where suppor
 
 ## Version and Windows distribution
 
+The Windows Setup executable installs to `C:\Program Files\ICC Profile Inspector` by default and requests administrator approval. After files are installed, choose optional Start menu and Desktop shortcuts, then choose whether to open the program. Windows Installed Apps provides an uninstaller. Updating or uninstalling does not remove ICC files or saved preferences/categories in `%APPDATA%\PrinterProfileICCInspector`.
+
+**⚙ → Check for Update** checks stable releases in this project's GitHub repository. The app also checks once on every normal startup, using a background worker. Only newer releases with a download for the current OS/architecture are offered; previews and incompatible downloads are excluded. When an update is available, you can open its GitHub release page. Downloads and installation remain your choice. Offline startup continues normally; a manual check reports connection errors. The check sends an anonymous HTTPS request to GitHub with the application version in its User-Agent; no profile contents, filenames or settings are sent.
+
+The gear is larger and borderless. The ICC tag list has a vertical scrollbar immediately to the right of the Size column.
+
 **⚙ → About** displays the application version. `python inspector.py --version` prints it without opening the GUI; the packaged executable also supports `--version` with an inherited output handle/parent console. Windows file properties include FileVersion/ProductVersion generated from `version.py`.
 
 The Windows executable is unsigned. Windows SmartScreen may show an unrecognized-app warning, and security products may flag a PyInstaller build. Checksums verify file integrity; they do not establish publisher identity or replace code signing. A manual trusted-signing workflow is prepared; follow [SIGNING.md](SIGNING.md) to configure an approved Azure signing identity. The current downloadable executable remains unsigned until a verified signed artifact is published. Do not bypass a warning for a download you cannot verify.
@@ -88,6 +94,8 @@ Tested runtime: Python 3.12 on Windows. GUI tests need a graphical desktop; GPU 
 | `check_upgrade.py` | Recovery, cross-process mutex, search/sort, background jobs, install contract, tags |
 | `preview_list.py` | Normal single-instance startup on Profile List |
 | `build.ps1` | Windows packaging with required dynamic modules |
+| `build-installer.ps1`, `installer/` | Inno Setup 7 installer, post-install shortcut choices and isolated install/uninstall smoke check |
+| `update_checker.py`, `check_updates.py` | Background release discovery and offline update/UI regression coverage |
 | `build_macos.py`, `make_macos_notices.py` | Native app/ZIP packaging with runner-specific license texts |
 | `check_platform.py`, `requirements-macos.txt` | macOS integration checks and pinned Mac dependencies |
 | `requirements.txt`, `requirements-lock.txt` | Dependency ranges and tested versions |
@@ -103,6 +111,7 @@ python -m venv .venv
 .venv\Scripts\python inspector.py
 .venv\Scripts\Activate.ps1
 .\build.ps1
+.\build-installer.ps1 -SkipAppBuild
 ```
 
 CI installs the locked dependencies plus `requirements-dev.txt`, runs Ruff correctness rules and all four functional check scripts. A hosted VM may lack hardware OpenGL; `check_gpu.py` is a separate release check on real hardware. The [first remote CI run passed](https://github.com/pmatra/Printer-Profile-Inspector/actions/runs/44582598712); the live Actions badge above reports subsequent pushes. The fixed color fixture is generated sRGB; vendor printer profiles are not redistributed.

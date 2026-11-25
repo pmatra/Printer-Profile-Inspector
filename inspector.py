@@ -10,6 +10,7 @@ import os
 import time
 import tempfile
 import subprocess
+import webbrowser
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from threading import Event, local
@@ -28,6 +29,7 @@ from icc_tags import decode_tag, TAG_NAMES
 from ui_style import system_font, shaded_buttons
 from version import __version__
 from gamut_analysis import hull_metrics
+from update_checker import check_for_update
 try:
     if sys.platform=='darwin': raise ImportError('The initial macOS build uses the CPU renderer.')
     from gamut_gpu import GamutGPU
@@ -259,6 +261,8 @@ class Inspector(ProfileCategories, tk.Tk):
         self.progress_queue = SimpleQueue()
         self.metric_future = None
         self.export_future = None
+        self.update_future = None
+        self.update_manual = False
         self.metric_identity = None
         self.library_rows = []
         self.jobs = []
@@ -334,12 +338,19 @@ class Inspector(ProfileCategories, tk.Tk):
         self.header = tk.Text(info, wrap='word', bg='#16202d', fg='#e3eaf4', relief='flat', width=36, font=(self.ui_family, self.ui_size), padx=12, pady=12)
         self.header.pack(fill='both', expand=True)
         tagpage = ttk.Frame(tabs); tabs.add(tagpage, text='ICC tags')
-        self.tags = ttk.Treeview(tagpage, columns=('description','type','size'), show='tree headings', height=5)
+        tag_list = ttk.Frame(tagpage)
+        tag_list.pack(fill='x')
+        tag_list.columnconfigure(0, weight=1)
+        self.tags = ttk.Treeview(tag_list, columns=('description','type','size'), show='tree headings', height=5)
         self.tags.heading('#0', text='Tag'); self.tags.column('#0', width=70)
         for col in ('description','type','size'):
             self.tags.heading(col, text=col.title()); self.tags.column(col, width=80)
         self.tags.column('description',width=145)
-        self.tags.pack(fill='x'); self.tags.bind('<<TreeviewSelect>>', self.tag_selected)
+        self.tags.grid(row=0, column=0, sticky='nsew')
+        self.tags_scrollbar = ttk.Scrollbar(tag_list, orient='vertical', command=self.tags.yview)
+        self.tags_scrollbar.grid(row=0, column=1, sticky='ns')
+        self.tags.configure(yscrollcommand=self.tags_scrollbar.set)
+        self.tags.bind('<<TreeviewSelect>>', self.tag_selected)
         details_tabs = ttk.Notebook(tagpage)
         details_tabs.pack(fill='both',expand=True)
         decoded = ttk.Frame(details_tabs); raw_frame = ttk.Frame(details_tabs)
@@ -380,11 +391,14 @@ class Inspector(ProfileCategories, tk.Tk):
             self.theme_menu.add_radiobutton(label=name, variable=self.theme_choice, value=name,
                                            command=self.change_theme)
         self.settings_menu.add_cascade(label='Theme', menu=self.theme_menu)
+        self.settings_menu.add_command(label='Check for Update', command=self.check_updates)
         self.settings_menu.add_command(label=f'About ICC Profile Inspector {__version__}…',command=self.show_about)
         self.cancel_button = ttk.Button(render_controls,text='Cancel work',command=self.cancel_work,state='disabled')
         self.cancel_button.pack(side='right')
-        self.gear_button = ttk.Button(self, text='⚙', width=3, command=self.show_settings,
-                                      takefocus=True)
+        self.gear_button = tk.Button(self, text='⚙', command=self.show_settings,
+                                      font=(self.ui_family, self.ui_size + 8), relief='flat',
+                                      borderwidth=0, highlightthickness=0, padx=4, pady=0,
+                                      takefocus=True, cursor='hand2')
         self.gear_button.place(relx=1, x=-14, y=10, anchor='ne')
         self.bind('<Control-comma>', lambda e: self.show_settings())
         self.apply_theme()
@@ -429,6 +443,39 @@ class Inspector(ProfileCategories, tk.Tk):
 
     def show_about(self):
         messagebox.showinfo('About ICC Profile Inspector',f'ICC Profile Inspector {__version__}\n\nCopyright © 2026 Peter Matra\nMIT license; dependencies retain their own licenses.\n\nGamut surfaces and volumes are sampled convex-hull approximations.',parent=self)
+
+    def check_updates(self, automatic=False):
+        if self.closing:
+            return
+        if self.update_future is not None:
+            self.update_manual = self.update_manual or not automatic
+            return
+        self.update_manual = not automatic
+        self.update_future = self.io_executor.submit(check_for_update, __version__)
+        if not automatic:
+            self.status.configure(text='Checking GitHub for updates…')
+
+    def finish_update_check(self):
+        if self.update_future is None or not self.update_future.done():
+            return
+        future, manual = self.update_future, self.update_manual
+        self.update_future = None
+        self.update_manual = False
+        try:
+            release = future.result()
+        except Exception as exc:
+            if manual:
+                messagebox.showwarning('Update check unavailable', str(exc), parent=self)
+                self.status.configure(text='Update check unavailable. Try again from Settings.')
+            return  # Offline startup must not interrupt normal profile inspection.
+        if release is None:
+            if manual:
+                messagebox.showinfo('Check for Update', f'You have version {__version__}.\nNo newer stable release for this system was found on GitHub.', parent=self)
+                self.status.configure(text=f'No newer compatible release found (installed {__version__}).')
+            return
+        if messagebox.askyesno('Update available', f'ICC Profile Inspector {release.version} is available.\nInstalled version: {__version__}\n\nOpen the GitHub release page to download the update?', parent=self):
+            if not webbrowser.open(release.url):
+                messagebox.showinfo('Update download', f'Open this address in your browser:\n{release.url}', parent=self)
 
     def show_application(self,*args):
         self.deiconify();self.lift();self.focus_force()
@@ -535,6 +582,8 @@ class Inspector(ProfileCategories, tk.Tk):
         style.configure('Vertical.TScrollbar', background=p['panel'], troughcolor=p['bg'], arrowcolor=p['text'])
         style.configure('Horizontal.TScrollbar', background=p['panel'], troughcolor=p['bg'], arrowcolor=p['text'])
         self.configure(bg=p['bg'])
+        self.gear_button.configure(bg=p['bg'], fg=p['text'], activebackground=p['bg'],
+                                   activeforeground=p['text'], highlightbackground=p['bg'])
         for text in (self.header, self.raw, self.tag_details):
             text.configure(bg=p['field'], fg=p['text'], insertbackground=p['text'],
                            selectbackground=p['selected'], selectforeground=p['selection_text'])
@@ -905,6 +954,7 @@ class Inspector(ProfileCategories, tk.Tk):
 
     def poll_jobs(self):
         if self.closing: return
+        self.finish_update_check()
         if SETTINGS_NOTICES: self.report_settings_recovery()
         directories=[]
         for future,token,generation,directory in self.directory_jobs:
@@ -1093,6 +1143,7 @@ def main(initial_list=False):
         raise_existing_window(); return
     try:
         app=Inspector()
+        app.after(1500, lambda: app.check_updates(automatic=True))
         if initial_list: app.main_tabs.select(app.list_tab)
         paths=[value for value in sys.argv[1:] if not value.startswith('-psn_')]
         if paths: app.after(100,lambda:app.load(paths[0]))
