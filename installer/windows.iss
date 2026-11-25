@@ -41,14 +41,35 @@ Source: "INNO_SETUP_LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
 Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"; Description: "Open ICC Profile Inspector"; Flags: postinstall nowait skipifsilent runasoriginaluser unchecked
 
 [UninstallDelete]
-Type: files; Name: "{autoprograms}\ICC Profile Inspector.lnk"
-Type: files; Name: "{autodesktop}\ICC Profile Inspector.lnk"
+Type: files; Name: "{autoprograms}\ICC Profile Inspector.lnk"; Check: DeleteStartMenuShortcut
+Type: files; Name: "{autodesktop}\ICC Profile Inspector.lnk"; Check: DeleteDesktopShortcut
+Type: files; Name: "{app}\installer-shortcuts.ini"
 ; Settings and categories in each user's AppData are deliberately preserved.
 
 [Code]
 var
   ShortcutPage: TInputOptionWizardPage;
   ShortcutsCreated: Boolean;
+  OwnStartMenuShortcut, OwnDesktopShortcut: Boolean;
+
+function InitializeUninstall: Boolean;
+begin
+  OwnStartMenuShortcut := GetIniBool('Shortcuts', 'StartMenu', False,
+    ExpandConstant('{app}\installer-shortcuts.ini'));
+  OwnDesktopShortcut := GetIniBool('Shortcuts', 'Desktop', False,
+    ExpandConstant('{app}\installer-shortcuts.ini'));
+  Result := True;
+end;
+
+function DeleteStartMenuShortcut: Boolean;
+begin
+  Result := OwnStartMenuShortcut;
+end;
+
+function DeleteDesktopShortcut: Boolean;
+begin
+  Result := OwnDesktopShortcut;
+end;
 
 procedure InitializeWizard;
 begin
@@ -72,12 +93,14 @@ begin
     CreateShellLink(Link, 'Inspect ICC profiles and 3D printer gamuts',
       ExpandConstant('{app}\{#AppExe}'), '', ExpandConstant('{app}'),
       ExpandConstant('{app}\{#AppExe}'), 0, SW_SHOWNORMAL);
+    SetIniBool('Shortcuts', 'StartMenu', True, ExpandConstant('{app}\installer-shortcuts.ini'));
   end;
   if ShortcutPage.Values[1] then begin
     Link := ExpandConstant('{autodesktop}\ICC Profile Inspector.lnk');
     CreateShellLink(Link, 'ICC Profile Inspector',
       ExpandConstant('{app}\{#AppExe}'), '', ExpandConstant('{app}'),
       ExpandConstant('{app}\{#AppExe}'), 0, SW_SHOWNORMAL);
+    SetIniBool('Shortcuts', 'Desktop', True, ExpandConstant('{app}\installer-shortcuts.ini'));
   end;
   ShortcutsCreated := True;
 end;

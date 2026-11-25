@@ -33,7 +33,9 @@ jobs:
           $compiler = & ./installer/get-compiler.ps1 -Destination "$env:RUNNER_TEMP/inno-sdk"
           ./build-installer.ps1 -Compiler $compiler
       - name: Install, smoke-check and uninstall isolated test copy
-        run: ./installer/check-install.ps1 -Installer (Get-ChildItem dist/installer/*-x64.exe).FullName
+        run: |
+          ./installer/check-install.ps1 -Installer (Get-ChildItem dist/installer/*-x64.exe).FullName -VerifyPreservedShortcuts
+          ./installer/check-install.ps1 -Installer (Get-ChildItem dist/installer/*-x64.exe).FullName -TestShortcuts
       - uses: actions/upload-artifact@v6
         with:
           name: Windows-installer
