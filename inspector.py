@@ -473,6 +473,7 @@ class Inspector(ProfileCategories, tk.Tk):
                 messagebox.showinfo('Check for Update', f'You have version {__version__}.\nNo newer stable release for this system was found on GitHub.', parent=self)
                 self.status.configure(text=f'No newer compatible release found (installed {__version__}).')
             return
+        self.status.configure(text=f'Update available: {release.version} (installed {__version__}).')
         if messagebox.askyesno('Update available', f'ICC Profile Inspector {release.version} is available.\nInstalled version: {__version__}\n\nOpen the GitHub release page to download the update?', parent=self):
             if not webbrowser.open(release.url):
                 messagebox.showinfo('Update download', f'Open this address in your browser:\n{release.url}', parent=self)

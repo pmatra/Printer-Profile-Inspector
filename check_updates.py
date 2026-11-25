@@ -70,6 +70,7 @@ def run_checks():
             future.set_result(u.Release('0.9.0',newer['html_url'],newer['assets'][0]['name']))
             with patch.object(m.messagebox,'askyesno',side_effect=lambda *a,**k: threading.get_ident()==main_thread) as prompt, patch.object(m.webbrowser,'open',return_value=True) as browser:
                 app.finish_update_check();assert prompt.call_count==1;browser.assert_called_once_with(newer['html_url'])
+                assert 'Update available: 0.9.0' in app.status.cget('text')
             for manual in (False,True):
                 future=Future();future.set_exception(u.UpdateCheckError('offline'));app.update_future=future;app.update_manual=manual
                 with patch.object(m.messagebox,'showwarning') as warning:
