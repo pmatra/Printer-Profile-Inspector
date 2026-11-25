@@ -30,6 +30,8 @@ try {
     $result = Get-Content -LiteralPath $report -Raw | ConvertFrom-Json
     if (-not $result.passed) { throw "Installed application checks failed: $($result.error)" }
     if ($TestShortcuts) {
+        $ownership = Join-Path $target 'installer-shortcuts.ini'
+        if (-not (Test-Path -LiteralPath $ownership)) { throw 'Shortcut ownership was not recorded.' }
         $shell = New-Object -ComObject WScript.Shell
         foreach ($link in $shortcutPaths) {
             if (-not (Test-Path -LiteralPath $link)) { throw 'Selected shortcut was not created.' }

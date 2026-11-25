@@ -41,8 +41,6 @@ Source: "INNO_SETUP_LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
 Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"; Description: "Open ICC Profile Inspector"; Flags: postinstall nowait skipifsilent runasoriginaluser unchecked
 
 [UninstallDelete]
-Type: files; Name: "{autoprograms}\ICC Profile Inspector.lnk"; Check: DeleteStartMenuShortcut
-Type: files; Name: "{autodesktop}\ICC Profile Inspector.lnk"; Check: DeleteDesktopShortcut
 Type: files; Name: "{app}\installer-shortcuts.ini"
 ; Settings and categories in each user's AppData are deliberately preserved.
 
@@ -61,14 +59,16 @@ begin
   Result := True;
 end;
 
-function DeleteStartMenuShortcut: Boolean;
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
-  Result := OwnStartMenuShortcut;
-end;
-
-function DeleteDesktopShortcut: Boolean;
-begin
-  Result := OwnDesktopShortcut;
+  { UninstallDelete Check functions run when Setup records the uninstall log,
+    before our post-install choices. Remove owned links at uninstall time. }
+  if CurUninstallStep = usUninstall then begin
+    if OwnStartMenuShortcut then
+      DeleteFile(ExpandConstant('{autoprograms}\ICC Profile Inspector.lnk'));
+    if OwnDesktopShortcut then
+      DeleteFile(ExpandConstant('{autodesktop}\ICC Profile Inspector.lnk'));
+  end;
 end;
 
 procedure InitializeWizard;
